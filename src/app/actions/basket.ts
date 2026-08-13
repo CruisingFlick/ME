@@ -1,0 +1,217 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { and, eq, inArray } from "drizzle-orm";
+import { db } from "@/db";
+import { favourites, requestItems, requests } from "@/db/schema";
+import { requireCustomer } from "@/lib/customer-session";
+import { getOrCreateDraft } from "@/lib/requests";
+
+function clampQty(raw: FormDataEntryValue | null): number {
+  const n = Number.parseInt(String(raw ?? "1"), 10);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(n, 999);
+}
+
+function cleanUrl(raw: string): string | null {
+  const v = raw.trim();
+  if (!v) return null;
+  try {
+    const u = new URL(v);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The single entry point for all three capture methods. Paste, photo and share
+ * differ only in which fields arrive already filled — by the time an item is
+ * added it is the same row either way.
+ */
+export async function addItem(data: FormData) {
+  const { customer, rep } = await requireCustomer();
+  const draft = await getOrCreateDraft(rep.id, customer.id);
+
+  const title = String(data.get("title") ?? "").trim();
+  const sourceUrl = cleanUrl(String(data.get("sourceUrl") ?? ""));
+  const imageUrl = cleanUrl(String(data.get("imageUrl") ?? ""));
+  const price = String(data.get("price") ?? "").trim() || null;
+  const note = String(data.get("customerNote") ?? "").trim() || null;
+
+  // Guardrail #4 in practice: an item with nothing but a URL is still a valid
+  // item. The rep can open the link. Never block the add.
+  const finalTitle = title || (sourceUrl ? "Item from link" : "");
+  if (!finalTitle) return;
+
+  await db.insert(requestItems).values({
+    requestId: draft.id,
+    title: finalTitle.slice(0, 500),
+    sourceUrl,
+    imageUrl,
+    price: price ? price.slice(0, 120) : null,
+    quantity: clampQty(data.get("quantity")),
+    customerNote: note,
+  });
+
+  await db
+    .update(requests)
+    .set({ updatedAt: new Date() })
+    .where(eq(requests.id, draft.id));
+
+  revalidatePath("/shop");
+}
+
+async function assertOwnsItem(itemId: string, customerId: string) {
+  const [row] = await db
+    .select({ id: requestItems.id, status: requests.status })
+    .from(requestItems)
+    .innerJoin(requests, eq(requestItems.requestId, requests.id))
+    .where(and(eq(requestItems.id, itemId), eq(requests.customerId, customerId)))
+    .limit(1);
+  // Only a draft is editable — once it's sent, it's the rep's to work from.
+  return row && row.status === "draft" ? row : null;
+}
+
+export async function updateItemQuantity(data: FormData) {
+  const { customer } = await requireCustomer();
+  const id = String(data.get("itemId") ?? "");
+  if (!(await assertOwnsItem(id, customer.id))) return;
+
+  await db
+    .update(requestItems)
+    .set({ quantity: clampQty(data.get("quantity")) })
+    .where(eq(requestItems.id, id));
+
+  revalidatePath("/shop");
+}
+
+export async function removeItem(data: FormData) {
+  const { customer } = await requireCustomer();
+  const id = String(data.get("itemId") ?? "");
+  if (!(await assertOwnsItem(id, customer.id))) return;
+
+  await db.delete(requestItems).where(eq(requestItems.id, id));
+  revalidatePath("/shop");
+}
+
+export async function submitRequest(data: FormData) {
+  const { customer, rep } = await requireCustomer();
+  const draft = await getOrCreateDraft(rep.id, customer.id);
+
+  const items = await db
+    .select({ id: requestItems.id })
+    .from(requestItems)
+    .where(eq(requestItems.requestId, draft.id));
+  if (items.length === 0) return;
+
+  const message = String(data.get("customerMessage") ?? "").trim() || null;
+  const now = new Date();
+
+  await db
+    .update(requests)
+    .set({
+      status: "received",
+      customerMessage: message,
+      submittedAt: now,
+      updatedAt: now,
+    })
+    .where(and(eq(requests.id, draft.id), eq(requests.status, "draft")));
+
+  revalidatePath("/shop");
+  revalidatePath("/shop/requests");
+  redirect(`/shop/requests?sent=${draft.id}`);
+}
+
+/** Block 5: reorder — clone a past request's items into the current draft. */
+export async function reorder(data: FormData) {
+  const { customer, rep } = await requireCustomer();
+  const sourceId = String(data.get("requestId") ?? "");
+
+  const [source] = await db
+    .select({ id: requests.id })
+    .from(requests)
+    .where(and(eq(requests.id, sourceId), eq(requests.customerId, customer.id)))
+    .limit(1);
+  if (!source) return;
+
+  const items = await db
+    .select()
+    .from(requestItems)
+    .where(eq(requestItems.requestId, source.id));
+  if (items.length === 0) return;
+
+  const draft = await getOrCreateDraft(rep.id, customer.id);
+  await db.insert(requestItems).values(
+    items.map((i) => ({
+      requestId: draft.id,
+      title: i.title,
+      sourceUrl: i.sourceUrl,
+      imageUrl: i.imageUrl,
+      price: i.price,
+      quantity: i.quantity,
+      customerNote: i.customerNote,
+    })),
+  );
+
+  revalidatePath("/shop");
+  redirect("/shop?reordered=1");
+}
+
+/** Block 5: favourites. */
+export async function saveFavourite(data: FormData) {
+  const { customer, rep } = await requireCustomer();
+  const title = String(data.get("title") ?? "").trim();
+  if (!title) return;
+
+  await db.insert(favourites).values({
+    repId: rep.id,
+    customerId: customer.id,
+    title: title.slice(0, 500),
+    sourceUrl: cleanUrl(String(data.get("sourceUrl") ?? "")),
+    imageUrl: cleanUrl(String(data.get("imageUrl") ?? "")),
+    price: String(data.get("price") ?? "").trim() || null,
+  });
+
+  revalidatePath("/shop/favourites");
+  revalidatePath("/shop");
+}
+
+export async function removeFavourite(data: FormData) {
+  const { customer } = await requireCustomer();
+  const id = String(data.get("favouriteId") ?? "");
+
+  await db
+    .delete(favourites)
+    .where(and(eq(favourites.id, id), eq(favourites.customerId, customer.id)));
+
+  revalidatePath("/shop/favourites");
+}
+
+export async function addFavouritesToDraft(data: FormData) {
+  const { customer, rep } = await requireCustomer();
+  const ids = data.getAll("favouriteId").map(String).filter(Boolean);
+  if (ids.length === 0) return;
+
+  const rows = await db
+    .select()
+    .from(favourites)
+    .where(and(eq(favourites.customerId, customer.id), inArray(favourites.id, ids)));
+  if (rows.length === 0) return;
+
+  const draft = await getOrCreateDraft(rep.id, customer.id);
+  await db.insert(requestItems).values(
+    rows.map((f) => ({
+      requestId: draft.id,
+      title: f.title,
+      sourceUrl: f.sourceUrl,
+      imageUrl: f.imageUrl,
+      price: f.price,
+      quantity: 1,
+    })),
+  );
+
+  revalidatePath("/shop");
+  redirect("/shop?added=" + rows.length);
+}
