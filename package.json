@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "test:scrape": "tsx src/lib/scrape.test.ts",
+    "scrape:try": "tsx src/lib/scrape-cli.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^0.10.4",

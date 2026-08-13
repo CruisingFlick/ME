@@ -40,9 +40,11 @@ export async function addItem(data: FormData) {
   const price = String(data.get("price") ?? "").trim() || null;
   const note = String(data.get("customerNote") ?? "").trim() || null;
 
-  // Guardrail #4 in practice: an item with nothing but a URL is still a valid
-  // item. The rep can open the link. Never block the add.
-  const finalTitle = title || (sourceUrl ? "Item from link" : "");
+  // Guardrail #4 in practice: an item with nothing but a link or a photo is
+  // still a valid item — the rep can open one and look at the other. Give it a
+  // placeholder name rather than silently dropping it.
+  const finalTitle =
+    title || (sourceUrl ? "Item from link" : imageUrl ? "Item from photo" : "");
   if (!finalTitle) return;
 
   await db.insert(requestItems).values({

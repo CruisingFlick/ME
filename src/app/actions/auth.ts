@@ -1,7 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { reps } from "@/db/schema";
 import { hashPassword, slugify, verifyPassword } from "@/lib/crypto";
@@ -96,14 +96,4 @@ export async function logOutRep() {
 export async function logOutCustomer() {
   await endCustomerSession();
   redirect("/");
-}
-
-/** Used by the rep account screen to confirm a slug is free before renaming. */
-export async function slugAvailable(slug: string, exceptRepId: string) {
-  const [taken] = await db
-    .select({ id: reps.id })
-    .from(reps)
-    .where(and(eq(reps.slug, slug)))
-    .limit(1);
-  return !taken || taken.id === exceptRepId;
 }

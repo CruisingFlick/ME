@@ -1,5 +1,3 @@
-import "server-only";
-
 export type ScrapeResult = {
   /** Always present — the URL is the fallback item on its own. */
   sourceUrl: string;
@@ -180,6 +178,62 @@ function isPubliclyRoutable(u: URL): boolean {
   return true;
 }
 
+function degrade(sourceUrl: string, reason: string): ScrapeResult {
+  return {
+    sourceUrl,
+    title: null,
+    imageUrl: null,
+    price: null,
+    degraded: true,
+    reason,
+  };
+}
+
+/**
+ * Turns a page's HTML into a product card. Pure and network-free, so the
+ * parsing rules can be tested against saved pages without hitting a live site.
+ *
+ * Tries JSON-LD first (richest and most reliable when present), then Open Graph
+ * and friends, then the plain <title>.
+ */
+export function parseProductHtml(html: string, sourceUrl: string): ScrapeResult {
+  const ld = fromJsonLd(html);
+
+  const title =
+    ld.title ??
+    meta(html, ["og:title", "twitter:title", "title", "name"]) ??
+    titleTag(html);
+
+  const imageUrl = absolutise(
+    ld.imageUrl ??
+      meta(html, ["og:image:secure_url", "og:image", "twitter:image", "image"]),
+    sourceUrl,
+  );
+
+  const price =
+    ld.price ??
+    formatPrice(
+      meta(html, [
+        "product:price:amount",
+        "og:price:amount",
+        "price",
+        "twitter:data1",
+      ]),
+      meta(html, ["product:price:currency", "og:price:currency", "priceCurrency"]) ??
+        "AUD",
+    );
+
+  // A title is the one thing that makes a card useful. Without it, degrade.
+  if (!title) {
+    return degrade(
+      sourceUrl,
+      "We couldn't read a product name off that page. Type what you need and we'll keep the link attached.",
+    );
+  }
+
+  return { sourceUrl, title, imageUrl, price, degraded: false };
+}
+
 /**
  * Reads the public HTML of a pasted product page and pulls out a card.
  *
@@ -212,14 +266,7 @@ export async function scrapeProduct(input: string): Promise<ScrapeResult> {
   }
 
   const sourceUrl = url.toString();
-  const fail = (reason: string): ScrapeResult => ({
-    sourceUrl,
-    title: null,
-    imageUrl: null,
-    price: null,
-    degraded: true,
-    reason,
-  });
+  const fail = (reason: string) => degrade(sourceUrl, reason);
 
   if (!isPubliclyRoutable(url)) {
     return fail("That link points somewhere we can't reach.");
@@ -260,38 +307,5 @@ export async function scrapeProduct(input: string): Promise<ScrapeResult> {
     );
   }
 
-  const ld = fromJsonLd(html);
-
-  const title =
-    ld.title ??
-    meta(html, ["og:title", "twitter:title", "title", "name"]) ??
-    titleTag(html);
-
-  const imageUrl = absolutise(
-    ld.imageUrl ??
-      meta(html, ["og:image:secure_url", "og:image", "twitter:image", "image"]),
-    sourceUrl,
-  );
-
-  const price =
-    ld.price ??
-    formatPrice(
-      meta(html, [
-        "product:price:amount",
-        "og:price:amount",
-        "price",
-        "twitter:data1",
-      ]),
-      meta(html, ["product:price:currency", "og:price:currency", "priceCurrency"]) ??
-        "AUD",
-    );
-
-  // A title is the one thing that makes a card useful. Without it, degrade.
-  if (!title) {
-    return fail(
-      "We couldn't read a product name off that page. Type what you need and we'll keep the link attached.",
-    );
-  }
-
-  return { sourceUrl, title, imageUrl, price, degraded: false };
+  return parseProductHtml(html, sourceUrl);
 }
