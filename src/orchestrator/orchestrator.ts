@@ -9,6 +9,7 @@ import { KillSwitch } from "../kernel/killswitch.js";
 import { Ledger } from "../kernel/ledger.js";
 import { PolicyEngine } from "../kernel/policy.js";
 import { openStore, type Store } from "../kernel/store/index.js";
+import { Workspaces } from "../kernel/workspace.js";
 import { TaskGraph } from "../kernel/tasks.js";
 import { buildIntegrations, integrationStatus, type Integrations } from "../integrations/index.js";
 import { ProviderRegistry } from "../providers/registry.js";
@@ -45,6 +46,9 @@ export interface RunReport {
   runId: string;
   status: "succeeded" | "failed" | "halted";
   workspace: string;
+  /** Head of the integration branch when the run ended, if anything was merged. */
+  head: string | null;
+  filesTracked: number;
   plan?: Plan;
   tasks: Task[];
   usage: Usage;
@@ -66,6 +70,7 @@ interface Wiring {
   integrations: Integrations;
   tools: ToolRegistry;
   providers: ProviderRegistry;
+  workspaces: Workspaces;
 }
 
 /**
@@ -89,8 +94,14 @@ export class Orchestrator {
   static async create(options: RunOptions): Promise<Orchestrator> {
     const config = options.config ?? getConfig();
     const runId = options.runId ?? id("run");
-    const workspace = resolve(options.workspace ?? config.HIVE_WORKSPACE, runId);
-    mkdirSync(workspace, { recursive: true });
+    const workspaceRoot = resolve(options.workspace ?? config.HIVE_WORKSPACE, runId);
+    mkdirSync(workspaceRoot, { recursive: true });
+
+    // Every task gets its own checkout; the integration branch is what the
+    // architect, integrator and operator see.
+    const workspaces = new Workspaces(workspaceRoot, runId);
+    await workspaces.init();
+    const workspace = workspaces.integration;
 
     const store = options.store ?? (await openStore());
     const ledger = new Ledger(store, runId, config.HIVE_STATE_DIR);
@@ -102,6 +113,7 @@ export class Orchestrator {
       tasks,
       bus: new MessageBus(store, ledger, runId),
       board: new Blackboard(store, ledger, runId),
+      workspaces,
       policy: new PolicyEngine({ runGrants: config.grants, workspace }),
       budget: new Budget({
         maxRunUsd: config.HIVE_MAX_USD,
@@ -186,10 +198,14 @@ export class Orchestrator {
       log.error(halted ? "run halted" : "run failed", message);
     }
 
+    await this.w.workspaces.cleanup();
+
     const report: RunReport = {
       runId: this.runId,
       status,
       workspace: this.workspace,
+      head: await this.w.workspaces.headSha(),
+      filesTracked: await this.w.workspaces.fileCount(),
       plan,
       tasks: this.w.tasks.all(),
       usage: this.w.budget.spent ?? { ...ZERO_USAGE },
@@ -207,6 +223,28 @@ export class Orchestrator {
     await this.w.board.put("run.report", report, "orchestrator");
     log.info(`run ${this.runId} ${status} - ${report.spendSummary}`);
     return report;
+  }
+
+  /**
+   * Run only the planning phase and return the validated plan.
+   *
+   * Iterating on a specification is much cheaper than discovering at the end of
+   * a build that the spec was ambiguous, so planning is worth being able to do
+   * on its own.
+   */
+  async planOnly(): Promise<Plan> {
+    this.w.kill.reset();
+    await this.w.ledger.record("run.started", "orchestrator", { mode: "plan-only" });
+    const plan = await this.plan();
+    await this.w.ledger.record("run.finished", "orchestrator", {
+      status: "succeeded",
+      spend: this.w.budget.summary(),
+    });
+    return plan;
+  }
+
+  get spendSummary(): string {
+    return this.w.budget.summary();
   }
 
   async close(): Promise<void> {
@@ -355,27 +393,36 @@ export class Orchestrator {
 
   private async buildAndReview(task: Task, slot: number): Promise<void> {
     const builderId = `builder-${slot + 1}`;
+    const current = this.w.tasks.get(task.id);
+
+    // A task returning after a failed merge starts from a fresh checkout of the
+    // current head; one returning after ordinary review feedback keeps its work.
+    const worktree = await this.w.workspaces.forTask(task.id, {
+      fresh: current.feedback?.startsWith("merge conflict") ?? false,
+    });
     await this.w.tasks.update(task.id, { status: "in_progress", assignee: builderId });
 
-    const builder = this.agent(builderId, "builder", this.builderProvider, this.builderModel);
-    const current = this.w.tasks.get(task.id);
+    const builder = this.agent(builderId, "builder", this.builderProvider, this.builderModel, worktree);
     const outcome = await builder.run({
       instruction: this.taskBrief(current),
+      context:
+        `You are working in an isolated checkout of the project at the root of your workspace. ` +
+        `Other builders are working in their own checkouts at the same time, so files outside ` +
+        `this task's scope may change under you before your work is merged.`,
       taskId: task.id,
     });
 
     const signal = outcome.signal?.name;
     if (signal === "block_task") {
-      await this.w.tasks.update(task.id, {
-        status: "abandoned",
-        feedback: String(outcome.signal?.payload.reason ?? "blocked"),
-      }, builderId);
+      const reason = String(outcome.signal?.payload.reason ?? "blocked");
+      await this.w.tasks.update(task.id, { status: "abandoned", feedback: reason }, builderId);
+      await this.w.workspaces.discardTask(task.id);
       await this.w.bus.send({
         from: builderId,
         to: "architect",
         kind: "blocker",
         subject: `blocked on ${task.id}: ${current.title}`,
-        body: String(outcome.signal?.payload.reason ?? ""),
+        body: reason,
         taskId: task.id,
       });
       return;
@@ -383,49 +430,112 @@ export class Orchestrator {
 
     if (signal !== "complete_task") {
       await this.finishUnsignalled(task.id, builderId, outcome);
+      await this.w.workspaces.discardTask(task.id);
       return;
+    }
+
+    const summary = String(outcome.signal?.payload.summary ?? "");
+    const commit = await this.w.workspaces.commitTask(
+      task.id,
+      `hive ${task.id}: ${current.title}`,
+    );
+    await this.w.ledger.record("task.status", builderId, {
+      taskId: task.id,
+      committed: commit.committed,
+      filesChanged: commit.filesChanged,
+    });
+
+    // A builder that declared completion but changed nothing has not done the
+    // task, whatever its summary says.
+    if (!commit.committed) {
+      return this.rejectTask(
+        task.id,
+        current,
+        "You called complete_task but the checkout contains no changes. Write the files the brief asks for.",
+      );
     }
 
     await this.w.tasks.update(task.id, { status: "in_review" }, builderId);
-    const summary = String(outcome.signal?.payload.summary ?? "");
-    const verdict = await this.review(this.w.tasks.get(task.id), summary);
+    const diff = await this.w.workspaces.diffTask(task.id);
+    const verdict = await this.review(this.w.tasks.get(task.id), summary, worktree, diff);
 
-    if (verdict.approved) {
-      await this.w.tasks.update(task.id, { status: "done", feedback: verdict.summary }, "reviewer-1");
-      return;
+    if (!verdict.approved) {
+      return this.rejectTask(task.id, this.w.tasks.get(task.id), verdict.summary);
     }
 
-    const rounds = current.reviewRounds + 1;
-    if (rounds >= this.config.HIVE_MAX_REVIEW_ROUNDS) {
-      // A review loop that will not converge is a real outcome, not something to
-      // keep paying for. Stop it and let the integrator see the state as it is.
-      await this.w.tasks.update(
+    const merge = await this.w.workspaces.mergeTask(task.id);
+    if (!merge.merged) {
+      // The reviewer approved the code; it simply no longer applies to the head
+      // it must land on. That is a rebuild, not a review failure.
+      await this.w.ledger.record("task.status", "orchestrator", {
+        taskId: task.id,
+        merge: "conflict",
+        conflicts: merge.conflicts,
+      });
+      return this.rejectTask(
         task.id,
+        this.w.tasks.get(task.id),
+        `merge conflict: your work was approved but no longer applies to the integration branch. ` +
+          `Conflicting files: ${merge.conflicts.join(", ") || "unknown"}. ` +
+          `You have a fresh checkout of the current code; redo the change on top of it.`,
+      );
+    }
+
+    await this.w.tasks.update(task.id, { status: "done", feedback: verdict.summary }, "reviewer-1");
+    await this.w.workspaces.discardTask(task.id);
+  }
+
+  /**
+   * Send a task back for another round, or give up on it.
+   *
+   * A loop that will not converge is a real outcome and must cost a bounded
+   * amount, so the round count is the same whether the rejection came from the
+   * reviewer, from an empty commit, or from a failed merge.
+   */
+  private async rejectTask(taskId: string, task: Task, feedback: string): Promise<void> {
+    const rounds = task.reviewRounds + 1;
+    if (rounds >= this.config.HIVE_MAX_REVIEW_ROUNDS) {
+      await this.w.tasks.update(
+        taskId,
         {
           status: "abandoned",
           reviewRounds: rounds,
-          feedback: `review did not converge after ${rounds} rounds. Last findings:\n${verdict.summary}`,
+          feedback: `did not converge after ${rounds} rounds. Last feedback:\n${feedback}`,
         },
         "reviewer-1",
       );
+      await this.w.workspaces.discardTask(taskId);
       return;
     }
-
     await this.w.tasks.update(
-      task.id,
-      { status: "changes_requested", reviewRounds: rounds, feedback: verdict.summary },
+      taskId,
+      { status: "changes_requested", reviewRounds: rounds, feedback },
       "reviewer-1",
     );
   }
 
-  private async review(task: Task, builderSummary: string): Promise<{ approved: boolean; summary: string }> {
-    const reviewer = this.agent("reviewer-1", "reviewer", this.reviewerProvider, this.reviewerModel);
+  private async review(
+    task: Task,
+    builderSummary: string,
+    worktree: string,
+    diff: string,
+  ): Promise<{ approved: boolean; summary: string }> {
+    const reviewer = this.agent(
+      "reviewer-1",
+      "reviewer",
+      this.reviewerProvider,
+      this.reviewerModel,
+      // The reviewer reads the builder's own checkout, so it can run the tests
+      // against exactly the code it is judging.
+      worktree,
+    );
     const outcome = await reviewer.run({
       instruction:
         `Review task ${task.id}: ${task.title}\n\n` +
         `--- brief given to the builder ---\n${task.brief}\n\n` +
         `--- files the task owns ---\n${task.paths.join("\n") || "(not specified)"}\n\n` +
-        `--- the builder's own summary ---\n${builderSummary}`,
+        `--- the builder's own summary ---\n${builderSummary}\n\n` +
+        `--- the diff you are reviewing ---\n${diff}`,
       context:
         `This is review round ${task.reviewRounds + 1} of ${this.config.HIVE_MAX_REVIEW_ROUNDS}. ` +
         `If the work satisfies the brief, approve it; do not withhold approval over style.`,
@@ -525,7 +635,17 @@ export class Orchestrator {
 
   // --- wiring --------------------------------------------------------------
 
-  private agent(agentId: string, role: Role, providerId: string, model: string): Agent {
+  /**
+   * @param workspace the checkout this agent works in - a task worktree for a
+   *   builder or its reviewer, the integration branch for everyone else.
+   */
+  private agent(
+    agentId: string,
+    role: Role,
+    providerId: string,
+    model: string,
+    workspace: string = this.workspace,
+  ): Agent {
     const provider = this.w.providers.get(providerId);
     const spec: AgentSpec = {
       id: agentId,
@@ -540,12 +660,15 @@ export class Orchestrator {
     };
     const context: Omit<ToolContext, "agent" | "taskId" | "log"> = {
       runId: this.runId,
-      workspace: this.workspace,
+      workspace,
       bus: this.w.bus,
       board: this.w.board,
       tasks: this.w.tasks,
       ledger: this.w.ledger,
-      policy: this.w.policy,
+      policy:
+        workspace === this.workspace
+          ? this.w.policy
+          : new PolicyEngine({ runGrants: this.config.grants, workspace }),
       budget: this.w.budget,
       kill: this.w.kill,
       integrations: this.w.integrations,

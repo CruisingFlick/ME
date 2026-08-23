@@ -39,6 +39,23 @@ export class GitHub {
     return owner && repo ? { owner, repo } : null;
   }
 
+  /** Read-only preflight: who are we, and can we see the configured repo? */
+  async verify(): Promise<string> {
+    const me = await request<{ login: string }>("github", `${API}/user`, {
+      headers: this.headers(),
+      retries: 1,
+    });
+    const ref = this.defaultRepo();
+    if (!ref) return `authenticated as ${me.login}; GITHUB_REPO not set`;
+    const repo = await request<{ full_name: string; default_branch: string; permissions?: { push?: boolean } }>(
+      "github",
+      `${API}/repos/${ref.owner}/${ref.repo}`,
+      { headers: this.headers(), retries: 1 },
+    );
+    const push = repo.permissions?.push ? "push" : "read-only";
+    return `${me.login} -> ${repo.full_name} (default ${repo.default_branch}, ${push})`;
+  }
+
   async getRepo(ref: RepoRef): Promise<{ default_branch: string; html_url: string }> {
     return request("github", `${API}/repos/${ref.owner}/${ref.repo}`, {
       headers: this.headers(),

@@ -27,6 +27,26 @@ export class Resend {
     return null;
   }
 
+  /**
+   * Read-only preflight. Deliberately lists domains rather than sending a test
+   * message: a verification step must never itself reach a person's inbox.
+   */
+  async verify(): Promise<string> {
+    const result = await request<{ data?: Array<{ name: string; status: string }> }>(
+      "resend",
+      `${API}/domains`,
+      { headers: { authorization: `Bearer ${this.key}` }, retries: 1 },
+    );
+    const domains = result.data ?? [];
+    const from = getConfig().RESEND_FROM ?? "";
+    const sender = from.split("@")[1];
+    const match = domains.find((d) => d.name === sender);
+    if (!sender) return `key valid, ${domains.length} domain(s); RESEND_FROM has no domain`;
+    return match
+      ? `key valid; sending domain ${sender} is ${match.status}`
+      : `key valid, but ${sender} is not a verified domain on this account`;
+  }
+
   async send(to: string, subject: string, text: string): Promise<{ id: string }> {
     return request("resend", `${API}/emails`, {
       method: "POST",

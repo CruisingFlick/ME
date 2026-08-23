@@ -47,6 +47,15 @@ export class CliProvider implements ModelProvider {
     return this.available() ? null : `${this.options.binary} is not on PATH`;
   }
 
+  async verify(): Promise<string> {
+    const path = which(this.options.binary);
+    if (!path) throw new Error(`${this.options.binary} is not on PATH`);
+    // Its own auth state is the CLI's business; all we can prove is that it runs.
+    const { code, stdout, stderr } = await run(this.options.binary, ["--version"], null, 20_000);
+    if (code !== 0) throw new Error(`${this.options.binary} --version exited ${code}: ${stderr.slice(0, 120)}`);
+    return `${path} (${stdout.trim().split("\n")[0] ?? "no version reported"})`;
+  }
+
   async complete(_model: string, request: CompletionRequest): Promise<CompletionResult> {
     const prompt = renderPrompt(request);
     const args = this.options.promptOnStdin
@@ -58,6 +67,7 @@ export class CliProvider implements ModelProvider {
       args,
       this.options.promptOnStdin ? prompt : null,
       this.options.timeoutMs ?? 10 * 60 * 1000,
+      request.cwd,
     );
 
     if (code !== 0) {
@@ -101,9 +111,13 @@ function run(
   args: string[],
   stdin: string | null,
   timeoutMs: number,
+  cwd?: string,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const child = spawn(binary, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(binary, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      ...(cwd ? { cwd } : {}),
+    });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);

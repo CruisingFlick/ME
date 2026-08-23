@@ -43,6 +43,23 @@ export class Railway {
     return result.data as T;
   }
 
+  /** Read-only preflight: whoami plus the configured project. */
+  async verify(): Promise<string> {
+    const data = await this.graphql<{ me: { email?: string; name?: string; id: string } }>(
+      `query { me { id email name } }`,
+      {},
+    );
+    const who = data.me.email ?? data.me.name ?? data.me.id;
+    const project = await this.graphql<{ project: { name: string } }>(
+      `query Project($id: String!) { project(id: $id) { name } }`,
+      { id: getConfig().RAILWAY_PROJECT_ID },
+    );
+    const env = getConfig().RAILWAY_ENVIRONMENT_ID
+      ? "environment set"
+      : "RAILWAY_ENVIRONMENT_ID not set (required to deploy)";
+    return `${who} -> project ${project.project.name}, ${env}`;
+  }
+
   async setVariables(
     serviceId: string,
     variables: Record<string, string>,

@@ -7,12 +7,15 @@ import { Orchestrator, type RunReport } from "./orchestrator/orchestrator.js";
 import { ProviderRegistry } from "./providers/registry.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { setLogLevel } from "./util/log.js";
+import { check, type VerifyResult } from "./verify.js";
 
 const USAGE = `hive - an autonomous multi-model engineering swarm
 
 Usage:
   hive build --spec <file>       Plan, build, review, integrate and ship a project
-  hive doctor                    Report which models and services are actually wired up
+  hive plan --spec <file>        Produce and validate a plan only, and stop
+  hive doctor                    Report which models and services are configured
+  hive verify                    Prove every credential works, with real read-only calls
   hive halt [reason]             Stop every run immediately
   hive resume                    Clear a halt
   hive report <run-id>           Replay a run's ledger
@@ -42,8 +45,12 @@ async function main(argv: string[]): Promise<number> {
   switch (command) {
     case "build":
       return build(flags);
+    case "plan":
+      return planOnly(flags);
     case "doctor":
       return doctor();
+    case "verify":
+      return verify();
     case "halt":
       return halt(rest.join(" "));
     case "resume":
@@ -126,12 +133,50 @@ async function build(flags: Flags): Promise<number> {
   }
 }
 
+async function planOnly(flags: Flags): Promise<number> {
+  if (!flags.spec) {
+    process.stderr.write("--spec is required\n");
+    return 2;
+  }
+  const spec = flags.spec === "-" ? readFileSync(0, "utf8") : readFileSync(flags.spec, "utf8");
+  const orchestrator = await Orchestrator.create({
+    spec,
+    provider: flags.provider,
+    model: flags.model,
+    workspace: flags.workspace,
+  });
+  try {
+    const plan = await orchestrator.planOnly();
+    const lines = [
+      "",
+      plan.summary,
+      "",
+      `stack        ${JSON.stringify(plan.stack)}`,
+      `integrations ${plan.integrations.join(", ") || "(none)"}`,
+      "",
+      "tasks",
+      ...plan.tasks.map((task) => {
+        const after = task.dependsOn.length > 0 ? ` after ${task.dependsOn.join(",")}` : "";
+        return `  ${task.id.padEnd(6)} ${task.title}${after}\n         owns: ${task.paths.join(", ") || "(unspecified)"}`;
+      }),
+      "",
+      `spend        ${orchestrator.spendSummary}`,
+      "",
+    ];
+    process.stdout.write(lines.join("\n"));
+    return 0;
+  } finally {
+    await orchestrator.close();
+  }
+}
+
 function renderReport(report: RunReport): string {
   const lines: string[] = [
     "",
     `run       ${report.runId}`,
     `status    ${report.status}`,
     `workspace ${report.workspace}`,
+    `head      ${report.head?.slice(0, 12) ?? "(nothing merged)"} - ${report.filesTracked} file(s) tracked`,
     `spend     ${report.spendSummary}`,
     `ledger    ${report.ledgerPath}`,
     "",
@@ -190,6 +235,63 @@ async function doctor(): Promise<number> {
 
   process.stdout.write(lines.join("\n"));
   return providers.availableIds().length > 0 ? 0 : 1;
+}
+
+/**
+ * Make a real call against everything that claims to be configured.
+ *
+ * `doctor` reports what the environment says; this reports what the services
+ * say back. The difference between the two is where an unattended run fails at
+ * its most expensive moment.
+ */
+async function verify(): Promise<number> {
+  const providers = new ProviderRegistry();
+  const integrations = buildIntegrations();
+
+  process.stdout.write("\nprobing every configured credential with a read-only call...\n\n");
+
+  const checks: Array<Promise<VerifyResult>> = [
+    ...providers.all().map((provider) =>
+      check(provider.id, "model", provider.available(), provider.unavailableReason(), () =>
+        provider.verify(),
+      ),
+    ),
+    ...Object.values(integrations).map((service) =>
+      check(service.name, "service", service.available(), service.unavailableReason(), () =>
+        service.verify(),
+      ),
+    ),
+  ];
+
+  const results = await Promise.all(checks);
+  const width = Math.max(...results.map((r) => r.name.length));
+
+  for (const kind of ["model", "service"] as const) {
+    process.stdout.write(`${kind}s\n`);
+    for (const result of results.filter((r) => r.kind === kind)) {
+      const mark = result.status === "ok" ? "ok  " : result.status === "failed" ? "FAIL" : "--  ";
+      const timing = result.ms > 0 ? ` (${result.ms}ms)` : "";
+      process.stdout.write(`  ${mark} ${result.name.padEnd(width)}  ${result.detail}${timing}\n`);
+    }
+    process.stdout.write("\n");
+  }
+
+  const failed = results.filter((r) => r.status === "failed");
+  const workingModels = results.filter((r) => r.kind === "model" && r.status === "ok");
+
+  if (failed.length > 0) {
+    process.stdout.write(
+      `${failed.length} credential(s) are set but do not work: ${failed.map((r) => r.name).join(", ")}\n` +
+        `Fix these before an unattended run - it would discover them mid-build.\n\n`,
+    );
+    return 1;
+  }
+  if (workingModels.length === 0) {
+    process.stdout.write("no working model provider - a run cannot start. Set ANTHROPIC_API_KEY.\n\n");
+    return 1;
+  }
+  process.stdout.write(`everything configured is working (${workingModels.length} model provider(s)).\n\n`);
+  return 0;
 }
 
 async function halt(reason: string): Promise<number> {

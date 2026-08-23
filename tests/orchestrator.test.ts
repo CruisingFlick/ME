@@ -45,6 +45,43 @@ function config(overrides: Record<string, string> = {}) {
   });
 }
 
+function fingerprint(text: string): string {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) | 0;
+  return Math.abs(hash).toString(36);
+}
+
+/**
+ * A builder that actually writes a file.
+ *
+ * Since worktree isolation landed, a task that declares completion with an
+ * empty diff is rejected, so a stub that only calls complete_task no longer
+ * represents a builder that did its job.
+ */
+function defaultBuilder(request: CompletionRequest) {
+  const used = (tool: string) =>
+    request.messages.some((turn) =>
+      turn.content.some((part) => part.type === "tool_call" && part.name === tool),
+    );
+  if (!used("write_file")) {
+    // Vary the content with the brief, so a task coming back with review
+    // feedback produces a real diff the way an actual builder would. Rewriting
+    // byte-identical content is correctly treated as having done nothing.
+    const brief = request.messages[0]?.content[0];
+    const revision = brief?.type === "text" ? fingerprint(brief.text) : "0";
+    return reply("writing", [
+      call("write_file", {
+        path: "index.js",
+        content: `export const ok = true;\n// revision ${revision}\n`,
+      }),
+    ]);
+  }
+  if (!used("complete_task")) {
+    return reply("finishing", [call("complete_task", { summary: "wrote index.js" })]);
+  }
+  return reply("done");
+}
+
 /** A scripted swarm: each role's behaviour is supplied by the test. */
 function scripted(script: {
   builder?: (request: CompletionRequest, seen: number) => ReturnType<typeof reply>;
@@ -61,9 +98,7 @@ function scripted(script: {
 
     if (request.system.includes("ROLE: builder")) {
       if (script.builder) return script.builder(request, counts.builder++);
-      return used("complete_task")
-        ? reply("done")
-        : reply("finishing", [call("complete_task", { summary: "wrote index.js" })]);
+      return defaultBuilder(request);
     }
 
     if (request.system.includes("ROLE: reviewer")) {
@@ -123,13 +158,10 @@ describe("Orchestrator", () => {
       builder: (request) => {
         // The opening turn is the brief; capture it to prove feedback arrives.
         const opening = request.messages[0]?.content[0];
-        if (opening?.type === "text") briefsSeen.push(opening.text);
-        const used = request.messages.some((t) =>
-          t.content.some((p) => p.type === "tool_call" && p.name === "complete_task"),
-        );
-        return used
-          ? reply("done")
-          : reply("finishing", [call("complete_task", { summary: "attempt" })]);
+        if (opening?.type === "text" && !briefsSeen.includes(opening.text)) {
+          briefsSeen.push(opening.text);
+        }
+        return defaultBuilder(request);
       },
       reviewer: (_request, seen) =>
         seen === 0

@@ -42,6 +42,17 @@ export class Neon {
     return { authorization: `Bearer ${this.key}` };
   }
 
+  /** Read-only preflight: does the key open the configured project? */
+  async verify(): Promise<string> {
+    const result = await request<{ project: { name: string; region_id: string } }>(
+      "neon",
+      `${API}/projects/${this.projectId}`,
+      { headers: this.headers(), retries: 1 },
+    );
+    const branches = await this.listBranches();
+    return `project ${result.project.name} in ${result.project.region_id}, ${branches.length} branch(es)`;
+  }
+
   async createBranch(name: string, parentId?: string): Promise<NeonBranch> {
     const result = await request<{
       branch: { id: string; name: string };

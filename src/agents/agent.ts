@@ -88,6 +88,7 @@ export class Agent {
           tools: available.map((tool) => tool.spec),
           effort: effortFor(this.spec.role),
           maxTokens: 32_000,
+          cwd: this.context.workspace,
         });
       } catch (err) {
         const message = err instanceof ProviderError ? err.message : String(err);

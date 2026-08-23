@@ -35,6 +35,10 @@ export class MockProvider implements ModelProvider {
     return null;
   }
 
+  async verify(): Promise<string> {
+    return "mock provider, no credential required";
+  }
+
   async complete(_model: string, request: CompletionRequest): Promise<CompletionResult> {
     this.seen.push(request);
     return this.handler(request, this.calls++);
@@ -97,11 +101,15 @@ function defaultHandler(request: CompletionRequest, _callIndex: number): Complet
 
   if (system.includes("ROLE: builder")) {
     if (has("write_file") && !usedAlready("write_file")) {
+      // Write the file this task actually owns. A mock that wrote the same path
+      // for every task would collide on the second one and look like a bug in
+      // the orchestrator rather than a limitation of the mock.
+      const brief = firstUserText(request);
+      const path = ownedPath(brief) ?? "src/index.js";
       return reply("Writing the file.", [
         call("write_file", {
-          path: "src/server.js",
-          content:
-            "export function health() {\n  return { ok: true };\n}\n",
+          path,
+          content: `// ${path}\nexport function handler() {\n  return { ok: true };\n}\n`,
         }),
       ]);
     }
@@ -143,4 +151,16 @@ function defaultHandler(request: CompletionRequest, _callIndex: number): Complet
   }
 
   return reply("(mock) acknowledged.");
+}
+
+function firstUserText(request: CompletionRequest): string {
+  const first = request.messages[0]?.content.find((part) => part.type === "text");
+  return first?.type === "text" ? first.text : "";
+}
+
+/** Recover the first path from the "Files you own:" line of a task brief. */
+function ownedPath(brief: string): string | null {
+  const match = /Files you own:\s*([^\n]+)/.exec(brief);
+  const first = match?.[1]?.split(",")[0]?.trim();
+  return first && !first.startsWith("(") ? first : null;
 }

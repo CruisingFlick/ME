@@ -42,6 +42,13 @@ export interface CompletionRequest {
   tools: ToolSpec[];
   maxTokens?: number;
   effort?: Effort;
+  /**
+   * Working directory for providers that execute somewhere - CLI-backed agents
+   * run their own tool loop in a real process, and it must be the agent's own
+   * checkout rather than wherever the orchestrator happens to be running.
+   * Ignored by HTTP providers.
+   */
+  cwd?: string;
 }
 
 export interface CompletionResult {
@@ -61,6 +68,11 @@ export interface ModelProvider {
   /** Why it is unavailable, for the run report. */
   unavailableReason(): string | null;
   complete(model: string, request: CompletionRequest): Promise<CompletionResult>;
+  /**
+   * Prove the credential works, without generating tokens. Resolves with a
+   * one-line description; rejects with the reason it does not.
+   */
+  verify(): Promise<string>;
 }
 
 export class ProviderError extends Error {

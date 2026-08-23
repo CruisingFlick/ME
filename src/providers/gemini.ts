@@ -29,6 +29,20 @@ export class GeminiProvider implements ModelProvider {
     return this.available() ? null : "GEMINI_API_KEY is not set";
   }
 
+  async verify(): Promise<string> {
+    const key = getConfig().GEMINI_API_KEY;
+    const response = await fetch(`${this.base}/models`, { headers: { "x-goog-api-key": key ?? "" } });
+    if (!response.ok) {
+      throw new Error(`${response.status}: ${(await response.text()).slice(0, 200)}`);
+    }
+    const json = (await response.json()) as { models?: Array<{ name: string }> };
+    // Gemini reports model names as "models/<id>".
+    const ids = json.models?.map((m) => m.name.replace(/^models\//, "")) ?? [];
+    return ids.includes(this.defaultModel)
+      ? `${ids.length} model(s); ${this.defaultModel} is available`
+      : `${ids.length} model(s), but GEMINI_MODEL "${this.defaultModel}" is not among them`;
+  }
+
   async complete(model: string, request: CompletionRequest): Promise<CompletionResult> {
     const key = getConfig().GEMINI_API_KEY;
     if (!key) throw new ProviderError("GEMINI_API_KEY is not set", this.id, false);

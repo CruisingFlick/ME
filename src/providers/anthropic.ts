@@ -39,6 +39,19 @@ export class AnthropicProvider implements ModelProvider {
     return this.client;
   }
 
+  /** Lists models rather than sending a message: proves the key, spends nothing. */
+  async verify(): Promise<string> {
+    const models = await this.sdk.models.list({ limit: 20 });
+    const ids = models.data.map((m) => m.id);
+    const hasDefault = ids.includes(this.defaultModel);
+    return (
+      `${ids.length} model(s) available; ` +
+      (hasDefault
+        ? `${this.defaultModel} is available`
+        : `${this.defaultModel} NOT in the list - set a model this key can reach`)
+    );
+  }
+
   async complete(model: string, request: CompletionRequest): Promise<CompletionResult> {
     const messages = request.messages.map((turn) => toAnthropicTurn(turn, this.id));
     try {

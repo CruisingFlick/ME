@@ -8,8 +8,9 @@ one back.
 
 ```bash
 npm install
-cp .env.example .env          # add at least ANTHROPIC_API_KEY
-npm run hive -- doctor        # what is actually wired up
+cp .env.example .env                 # add at least ANTHROPIC_API_KEY
+npm run hive -- verify               # prove every credential actually works
+npm run hive -- plan  --spec examples/url-shortener.md   # cheap: plan only
 npm run hive -- build --spec examples/url-shortener.md
 ```
 
@@ -59,6 +60,44 @@ as subprocesses. Pick per run:
 ```bash
 npm run hive -- build --spec spec.md --provider anthropic --review-provider gemini
 ```
+
+## Isolation
+
+Every task builds in its **own git worktree**, branched from the integration head
+at the moment it is dispatched. Nothing reaches the integration branch except
+through an explicit merge of approved work.
+
+```
+* 1c3cb2d  hive: merge t2
+|\
+| * 138107f  hive t2: Add a smoke test
+|/
+*   a3815db  hive: merge t1
+|\
+| * c306f6e  hive t1: Implement the service entrypoint
+|/
+* d60152c  hive run run_4dbf58c98d76: base
+```
+
+This matters more than it looks. File-ownership rules stop two builders from
+*claiming* the same file, but an agent can always read — and be misled by — a
+file another agent is halfway through writing. With worktrees, a collision
+surfaces as a **merge conflict**, which is a thing you can hand back to a
+builder, instead of as code that looks fine and is wrong.
+
+Consequences that fall out of this:
+
+- A dependent task branches from the head *after* its predecessor merged, so it
+  sees that work with no explicit hand-off.
+- The reviewer reads the builder's own checkout and gets the **diff**, so it
+  reviews what changed rather than the whole tree — and runs the tests against
+  exactly the code it is judging.
+- A task that declares completion with an empty diff is rejected. Saying you
+  finished is not finishing.
+- An approved task whose merge conflicts is sent back with a fresh checkout of
+  the current head — the code was right, it just no longer applies.
+- A failed merge is always aborted, so the integration branch is never left
+  stuck mid-merge for every later task to inherit.
 
 ## Guardrails
 
@@ -113,11 +152,26 @@ run keeps state in memory and is lost if the process dies.
 
 ```
 hive build --spec <file>   Plan, build, review, integrate and ship
-hive doctor                What is wired up, what is granted, what is withheld
+hive plan  --spec <file>   Produce and validate a plan only, and stop
+hive doctor                What is configured, what is granted, what is withheld
+hive verify                Prove every credential works, with real read-only calls
 hive halt [reason]         Stop every run at its next checkpoint
 hive resume                Clear a halt
 hive report <run-id>       Replay a run's ledger
 ```
+
+**Run `hive verify` before any unattended build.** `doctor` reports what your
+environment *claims*; `verify` makes a real read-only call to each service and
+reports what they say back. The difference is not academic:
+
+```
+services
+  FAIL github       github 401: Bad credentials (159ms)
+```
+
+That token was set, so `doctor` called it available. An unattended run would
+have discovered it in the ship phase, after spending the entire build budget
+getting there.
 
 `--dry-run` does everything except contact an external service. It is the right
 way to try a new spec.
@@ -137,12 +191,10 @@ mid-plan) reproducible in tests.
 
 ## Honest limits
 
-- **Agents write to one shared workspace.** Concurrent tasks are prevented from
-  claiming the same file, at plan time and again at dispatch, but this is not
-  isolation. Git worktrees per task are the right next step.
-- **CLI-backed agents are consultants, not workers.** A CLI agent runs its own
-  tool loop in its own process, so the hive cannot gate its tool calls or observe
-  its spend. They are good reviewers and poor builders, and the code says so.
+- **CLI-backed agents can plan and review, not build.** A CLI agent runs its own
+  tool loop in its own process, so the hive cannot gate its tool calls or see its
+  spend. `hive plan --provider claude-code` works today and needs no API key;
+  building through a CLI agent does not.
 - **A run is not resumable.** State persists to Postgres, but there is no
   `hive resume <run-id>` that picks a half-finished run back up.
 - **OpenAI and Gemini costs are estimates.** Only Anthropic rates are in the

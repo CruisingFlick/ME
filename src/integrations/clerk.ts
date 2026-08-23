@@ -29,6 +29,16 @@ export class Clerk {
     return { authorization: `Bearer ${this.key}` };
   }
 
+  /** Read-only preflight: list a single user to prove the secret key works. */
+  async verify(): Promise<string> {
+    const users = await request<Array<unknown>>("clerk", `${API}/users?limit=1`, {
+      headers: this.headers(),
+      retries: 1,
+    });
+    const mode = this.key?.startsWith("sk_live") ? "live" : "test";
+    return `${mode} instance reachable (${users.length} user sampled)`;
+  }
+
   async listUsers(limit = 10): Promise<Array<{ id: string; email_addresses: unknown[] }>> {
     return request("clerk", `${API}/users?limit=${limit}`, { headers: this.headers() });
   }

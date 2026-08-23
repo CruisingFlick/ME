@@ -114,6 +114,44 @@ prompt, so the cached prefix survives the whole task. Mid-loop inbox delivery is
 appended to tool-result turns rather than sent as its own call, so agents stay in
 touch without paying for a round trip to find out they have no mail.
 
+### A worktree per task, not a shared directory
+
+File-ownership rules are necessary and not sufficient. They stop two builders
+from claiming the same file; they cannot stop one from *reading* a file another
+is halfway through writing, and being confidently wrong as a result.
+
+So each task gets a real git checkout, branched from the integration head at
+dispatch. Three properties follow, and all three are load-bearing:
+
+1. **Branching at dispatch, not at plan time.** A dependent task branches after
+   its predecessor merged, so it inherits that work without a hand-off protocol.
+2. **The integration branch only advances by merge.** A collision becomes a
+   merge conflict — a concrete artefact with a file list — rather than silently
+   plausible code.
+3. **A failed merge is aborted, never left in progress.** A repository stuck
+   mid-merge would poison every task dispatched after it.
+
+The retry semantics differ by *why* a task came back, which is the part worth
+getting right: ordinary review feedback keeps the builder's checkout so it can
+address the findings, while a merge conflict rebuilds the checkout from the
+current head, because there the point is to redo the work against what landed.
+
+Rejection is funnelled through one path (`rejectTask`) regardless of cause —
+reviewer findings, an empty diff, or a failed merge — so the round budget is
+spent identically however a task fails. Otherwise a task could ping-pong on
+merge conflicts forever without ever consuming a review round.
+
+### `doctor` and `verify` answer different questions
+
+`doctor` reads the environment. `verify` calls the services. Keeping them apart
+is deliberate: an unattended run's most expensive failure is a credential that
+*looks* present, passes every startup check, and turns out to be dead in the
+ship phase — after the entire build budget has been spent reaching it.
+
+Every probe is read-only by construction. Resend's check lists domains rather
+than sending a test message: a verification step must never itself reach a
+person's inbox.
+
 ### Failure is a first-class outcome
 
 An autonomous swarm fails in ways nobody sees, so every dead end has an explicit
@@ -127,6 +165,8 @@ terminal state and a recorded reason:
 | Reviewer gave no verdict | treated as changes requested |
 | Budget or clock exhausted | run reports *why*, at the phase it happened |
 | Halt requested | every agent stops at its next checkpoint |
+| Completed with an empty diff | rejected — declaring completion is not finishing |
+| Approved but unmergeable | fresh checkout of current head, rebuild |
 
 The execute loop also carries an iteration guard. A guard that never fires costs
 nothing; a swarm that spins overnight costs real money.
@@ -141,7 +181,8 @@ watch an unattended run.
 
 ```
 src/
-  kernel/       ledger, bus, blackboard, tasks, budget, policy, killswitch, store
+  kernel/       ledger, bus, blackboard, tasks, budget, policy, killswitch,
+                workspace (git worktrees), store
   providers/    anthropic, openai, gemini, cli, mock, registry, pricing
   agents/       role prompts and the turn loop
   tools/        fs, shell, collaboration, integrations, per-role registry
