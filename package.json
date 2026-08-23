@@ -1,0 +1,30 @@
+{
+  "name": "hive",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Autonomous multi-model engineering swarm: many AI agents plan, build, review and ship a project together with no human in the loop.",
+  "engines": { "node": ">=20.10" },
+  "bin": { "hive": "./dist/cli.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "hive": "tsx src/cli.ts",
+    "demo": "tsx src/cli.ts build --spec examples/url-shortener.md --provider mock --dry-run",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0",
+    "dotenv": "^17.0.0",
+    "pg": "^8.13.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

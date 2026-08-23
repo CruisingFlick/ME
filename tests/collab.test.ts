@@ -1,0 +1,85 @@
+import { describe, expect, it, beforeEach } from "vitest";
+import { Blackboard } from "../src/kernel/blackboard.js";
+import { MessageBus } from "../src/kernel/bus.js";
+import { Ledger } from "../src/kernel/ledger.js";
+import { MemoryStore } from "../src/kernel/store/memory.js";
+
+const STATE_DIR = "/tmp/hive-test-state";
+
+async function wire() {
+  const store = new MemoryStore();
+  await store.init();
+  const ledger = new Ledger(store, "run_test", STATE_DIR);
+  return {
+    bus: new MessageBus(store, ledger, "run_test"),
+    board: new Blackboard(store, ledger, "run_test"),
+  };
+}
+
+describe("MessageBus", () => {
+  let bus: MessageBus;
+  beforeEach(async () => {
+    bus = (await wire()).bus;
+  });
+
+  it("delivers a directly addressed message", async () => {
+    await bus.send({ from: "architect-1", to: "builder-1", subject: "s", body: "b" });
+    const inbox = await bus.inbox("builder-1", "builder");
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]?.subject).toBe("s");
+  });
+
+  it("fans a role-addressed message out to that role", async () => {
+    await bus.send({ from: "architect-1", to: "builder", subject: "all builders", body: "b" });
+    expect(await bus.inbox("builder-1", "builder")).toHaveLength(1);
+    expect(await bus.inbox("builder-2", "builder")).toHaveLength(1);
+    expect(await bus.inbox("reviewer-1", "reviewer")).toHaveLength(0);
+  });
+
+  it("never delivers a message back to its own sender", async () => {
+    await bus.send({ from: "builder-1", to: "*", subject: "broadcast", body: "b" });
+    expect(await bus.inbox("builder-1", "builder")).toHaveLength(0);
+    expect(await bus.inbox("builder-2", "builder")).toHaveLength(1);
+  });
+
+  it("delivers each message once", async () => {
+    await bus.send({ from: "a", to: "builder-1", subject: "s", body: "b" });
+    const first = await bus.inbox("builder-1", "builder");
+    await bus.markRead("builder-1", first);
+    expect(await bus.inbox("builder-1", "builder")).toHaveLength(0);
+  });
+
+  it("keeps a reply in the same thread", async () => {
+    const request = await bus.send({ from: "a", to: "b", subject: "q", body: "?" });
+    await bus.send({
+      from: "b",
+      to: "a",
+      subject: "re: q",
+      body: "!",
+      kind: "response",
+      threadId: request.threadId,
+    });
+    expect(await bus.thread(request.threadId)).toHaveLength(2);
+  });
+});
+
+describe("Blackboard", () => {
+  it("versions an overwrite instead of losing the history", async () => {
+    const { board } = await wire();
+    const first = await board.put("api.contract", { v: 1 }, "architect-1");
+    const second = await board.put("api.contract", { v: 2 }, "builder-1");
+    expect(first.version).toBe(1);
+    expect(second.version).toBe(2);
+    expect((await board.get("api.contract"))?.value).toEqual({ v: 2 });
+  });
+
+  it("renders every key for prompt injection", async () => {
+    const { board } = await wire();
+    await board.put("db.schema", "create table x()", "builder-1");
+    await board.put("plan.stack", { runtime: "node" }, "architect-1");
+    const rendered = await board.render();
+    expect(rendered).toContain("db.schema");
+    expect(rendered).toContain("plan.stack");
+    expect(rendered).toContain("create table x()");
+  });
+});
