@@ -168,3 +168,43 @@ describe("resuming an interrupted run", () => {
     expect(existsSync(join(rebuilt, "in-progress.txt"))).toBe(false);
   });
 });
+
+describe("concurrent access to the shared repository", () => {
+  it("creates many worktrees at once without git tripping over its own index", async () => {
+    const ids = ["c1", "c2", "c3", "c4", "c5", "c6"];
+
+    // Builders run in parallel by design, so this is the normal case, not an
+    // edge case. Un-serialised, git fails the loser of an index.lock race.
+    const paths = await Promise.all(ids.map((id) => ws.forTask(id)));
+
+    expect(new Set(paths).size).toBe(ids.length);
+    for (const path of paths) expect(existsSync(join(path, ".gitignore"))).toBe(true);
+  });
+
+  it("merges tasks that finish simultaneously without losing any of them", async () => {
+    const ids = ["m1", "m2", "m3", "m4"];
+    for (const id of ids) {
+      const dir = await ws.forTask(id);
+      write(dir, `${id}.txt`, `written by ${id}`);
+      await ws.commitTask(id, `add ${id}`);
+    }
+
+    const merges = await Promise.all(ids.map((id) => ws.mergeTask(id)));
+
+    expect(merges.every((m) => m.merged)).toBe(true);
+    for (const id of ids) {
+      expect(readFileSync(join(ws.integration, `${id}.txt`), "utf8")).toBe(`written by ${id}`);
+    }
+  });
+
+  it("does not deadlock later work when one operation fails", async () => {
+    // A merge of a branch that does not exist fails; the queue must survive it.
+    const failed = await ws.mergeTask("never-existed");
+    expect(failed.merged).toBe(false);
+
+    const dir = await ws.forTask("after-failure");
+    write(dir, "ok.txt", "still working");
+    await ws.commitTask("after-failure", "add ok.txt");
+    expect((await ws.mergeTask("after-failure")).merged).toBe(true);
+  });
+});

@@ -38,6 +38,16 @@ export class Workspaces {
   readonly integration: string;
   private readonly worktreeRoot: string;
   private readonly created = new Set<string>();
+  /**
+   * Serialises every operation that touches the integration repository.
+   *
+   * Builders run in parallel by design, so without this two of them finishing
+   * at the same moment would run `git merge` against the same branch
+   * concurrently - or `git worktree add` against the same index. Git guards its
+   * own index with a lock file and simply fails the loser, which would surface
+   * as a random task failure under load and nowhere else.
+   */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
     root: string,
@@ -76,6 +86,13 @@ export class Workspaces {
    * see its predecessor's merged work without any explicit hand-off.
    */
   async forTask(taskId: string, options: { fresh?: boolean } = {}): Promise<string> {
+    return this.serialise(() => this.createWorktree(taskId, options));
+  }
+
+  private async createWorktree(
+    taskId: string,
+    options: { fresh?: boolean },
+  ): Promise<string> {
     const path = join(this.worktreeRoot, taskId);
     // An ordinary review round keeps the builder's work so it can address the
     // feedback. Only a failed merge asks for a fresh checkout, because there the
@@ -132,6 +149,10 @@ export class Workspaces {
 
   /** Fast-forward or merge an approved task into the integration branch. */
   async mergeTask(taskId: string): Promise<MergeResult> {
+    return this.serialise(() => this.merge(taskId));
+  }
+
+  private async merge(taskId: string): Promise<MergeResult> {
     const branch = this.branchFor(taskId);
     const exists = await this.git(this.integration, ["rev-parse", "--verify", branch]);
     if (exists.code !== 0) {
@@ -163,9 +184,11 @@ export class Workspaces {
 
   /** Drop an abandoned task's checkout without touching the integration branch. */
   async discardTask(taskId: string): Promise<void> {
-    const path = join(this.worktreeRoot, taskId);
-    await this.git(this.integration, ["worktree", "remove", "--force", path]);
-    this.created.delete(taskId);
+    return this.serialise(async () => {
+      const path = join(this.worktreeRoot, taskId);
+      await this.git(this.integration, ["worktree", "remove", "--force", path]);
+      this.created.delete(taskId);
+    });
   }
 
   async fileCount(): Promise<number> {
@@ -182,6 +205,18 @@ export class Workspaces {
   async cleanup(): Promise<void> {
     for (const taskId of [...this.created]) await this.discardTask(taskId);
     await this.git(this.integration, ["worktree", "prune"]);
+  }
+
+  /** Run `work` after every previously queued repository operation. */
+  private serialise<T>(work: () => Promise<T>): Promise<T> {
+    const result = this.queue.then(work, work);
+    // Keep the chain alive even if this operation rejects, or one failure would
+    // deadlock every later task behind it.
+    this.queue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   private branchFor(taskId: string): string {
