@@ -6,10 +6,16 @@ import type {
   ToolCall,
 } from "./types.js";
 
+/**
+ * A handler may return a promise, so a test can simulate a model that takes
+ * time. Without that, mock calls resolve within a single microtask and agents
+ * never actually overlap - which would make any test of parallel execution
+ * pass whether or not the orchestrator runs tasks concurrently.
+ */
 export type MockHandler = (
   request: CompletionRequest,
   callIndex: number,
-) => CompletionResult;
+) => CompletionResult | Promise<CompletionResult>;
 
 /**
  * A provider that never touches the network.
@@ -42,6 +48,11 @@ export class MockProvider implements ModelProvider {
   async complete(_model: string, request: CompletionRequest): Promise<CompletionResult> {
     this.seen.push(request);
     return this.handler(request, this.calls++);
+  }
+
+  /** Wait a tick, for handlers that want to simulate a model taking time. */
+  static async tick(ms = 5): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 

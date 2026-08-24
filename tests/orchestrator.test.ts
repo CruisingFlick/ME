@@ -141,6 +141,20 @@ async function runWith(
   return { report, provider };
 }
 
+const WIDE_PLAN = {
+  summary: "four independent tasks",
+  stack: {},
+  integrations: [],
+  tasks: ["a", "b", "c", "d"].map((letter) => ({
+    id: `t${letter}`,
+    title: `Build ${letter}`,
+    brief: `write ${letter}.js`,
+    paths: [`${letter}.js`],
+    dependsOn: [],
+    role: "builder",
+  })),
+};
+
 describe("Orchestrator", () => {
   it("plans, builds, reviews and integrates a project", async () => {
     const { report } = await runWith({});
@@ -274,6 +288,88 @@ describe("Orchestrator", () => {
     expect(report.usage.costUsd).toBeLessThan(0.02);
     // The run must say it ran out of money, not blame the architect's JSON.
     expect(JSON.stringify(report.notes)).toMatch(/budget|cap/i);
+  });
+
+  it("runs independent tasks in parallel and lands every one of them", async () => {
+    const { registry } = scripted({});
+    const provider = registry.get("mock") as MockProvider;
+    let concurrent = 0;
+    let peak = 0;
+
+    // Re-script with a plan wide enough that tasks genuinely overlap.
+    const wide = new ProviderRegistry(
+      new Map([
+        [
+          "mock",
+          new MockProvider(async (request) => {
+            if (request.system.includes("ROLE: architect")) return reply(JSON.stringify(WIDE_PLAN));
+
+            if (request.system.includes("ROLE: builder")) {
+              const opening = request.messages[0]?.content[0];
+              const brief = opening?.type === "text" ? opening.text : "";
+              const letter = /Task t(\w):/.exec(brief)?.[1] ?? "x";
+              const used = (tool: string) =>
+                request.messages.some((turn) =>
+                  turn.content.some((p) => p.type === "tool_call" && p.name === tool),
+                );
+              if (!used("write_file")) {
+                concurrent++;
+                peak = Math.max(peak, concurrent);
+                // Hold the slot long enough for the other builders to start.
+                await MockProvider.tick(25);
+                return reply("writing", [
+                  call("write_file", { path: `${letter}.js`, content: `export default "${letter}";\n` }),
+                ]);
+              }
+              if (!used("complete_task")) {
+                await MockProvider.tick(25);
+                concurrent--;
+                return reply("done", [call("complete_task", { summary: `wrote ${letter}.js` })]);
+              }
+              return reply("finished");
+            }
+
+            if (request.system.includes("ROLE: reviewer")) {
+              return request.messages.some((turn) =>
+                turn.content.some((p) => p.type === "tool_call" && p.name === "submit_review"),
+              )
+                ? reply("done")
+                : reply("ok", [call("submit_review", { verdict: "approve", summary: "fine" })]);
+            }
+
+            return request.messages.some((turn) =>
+              turn.content.some((p) => p.type === "tool_call" && p.name === "complete_task"),
+            )
+              ? reply("done")
+              : reply("green", [call("complete_task", { summary: "integrated" })]);
+          }),
+        ],
+      ]),
+    );
+
+    const store = new MemoryStore();
+    await store.init();
+    const orchestrator = await Orchestrator.create({
+      spec: "build four files",
+      provider: "mock",
+      reviewProvider: "mock",
+      config: config(),
+      providers: wide,
+      store,
+      integrations: buildIntegrations(),
+      dryRun: true,
+      parallelism: 3,
+    });
+    const report = await orchestrator.run();
+    await orchestrator.close();
+
+    expect(report.status).toBe("succeeded");
+    expect(report.tasks).toHaveLength(4);
+    expect(report.tasks.every((task) => task.status === "done")).toBe(true);
+    // All four merged into one branch: 4 task files plus .gitignore.
+    expect(report.filesTracked).toBe(5);
+    expect(peak).toBeGreaterThan(1);
+    expect(provider.seen.length).toBeGreaterThanOrEqual(0);
   });
 
   it("records the run in an append-only ledger", async () => {
