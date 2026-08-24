@@ -241,12 +241,17 @@ mid-plan) reproducible in tests.
 - **The policy engine cannot see inside a CLI-backed agent.** It runs its own
   tool loop, so command inspection does not apply there — only its worktree and
   its allowed tool list constrain it. Use an API provider where that matters.
-- **A run is not resumable.** State persists to Postgres, but there is no
-  `hive resume <run-id>` that picks a half-finished run back up.
+- **The ship phase has never been exercised against live services.** Everything
+  up to it is proven end to end with real models; pushing, provisioning and
+  deploying are written and unit-tested but have not run against real GitHub,
+  Neon or Railway credentials. Treat the first live ship as the shakedown.
 - **OpenAI and Gemini costs are estimates.** Only Anthropic rates are in the
   pricing table; the others are costed at Opus/Sonnet-equivalent rates so the cap
   errs toward stopping too early.
 - **Model ids move.** Anthropic's default is pinned; set `OPENAI_MODEL` and
   `GEMINI_MODEL` yourself rather than trusting this repo's defaults.
+- **One integration checkout per run.** Repository operations are serialised, so
+  parallel builders are safe, but throughput on merges is bounded by that queue.
+  It has not been a bottleneck at the scales tried (up to 5 tasks, 3 in flight).
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for why it is shaped this way.
