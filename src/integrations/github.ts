@@ -16,12 +16,19 @@ export class GitHub {
     return getConfig().GITHUB_TOKEN;
   }
 
+  /**
+   * A token without a repository is not a usable integration - every operation
+   * needs both. Reporting it available would send agents down a failure path
+   * that has no guidance attached, where inventing a repo name looks plausible.
+   */
   available(): boolean {
-    return Boolean(this.token);
+    return Boolean(this.token && this.defaultRepo());
   }
 
   unavailableReason(): string | null {
-    return this.available() ? null : "GITHUB_TOKEN is not set";
+    if (!this.token) return "GITHUB_TOKEN is not set";
+    if (!this.defaultRepo()) return "GITHUB_REPO is not set (expected owner/repo)";
+    return null;
   }
 
   private headers(): Record<string, string> {
@@ -46,7 +53,7 @@ export class GitHub {
       retries: 1,
     });
     const ref = this.defaultRepo();
-    if (!ref) return `authenticated as ${me.login}; GITHUB_REPO not set`;
+    if (!ref) throw new Error("GITHUB_REPO is not set (expected owner/repo)");
     const repo = await request<{ full_name: string; default_branch: string; permissions?: { push?: boolean } }>(
       "github",
       `${API}/repos/${ref.owner}/${ref.repo}`,
