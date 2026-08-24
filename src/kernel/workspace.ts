@@ -80,7 +80,14 @@ export class Workspaces {
     // An ordinary review round keeps the builder's work so it can address the
     // feedback. Only a failed merge asks for a fresh checkout, because there the
     // point is to redo the work on top of what has landed since.
-    if (this.created.has(taskId) && !options.fresh) return path;
+    //
+    // The on-disk check matters for a resumed run: this process did not create
+    // the worktree, but the interrupted work in it is exactly what resuming is
+    // meant to recover.
+    if (!options.fresh && (this.created.has(taskId) || existsSync(path))) {
+      this.created.add(taskId);
+      return path;
+    }
 
     const branch = this.branchFor(taskId);
     await this.git(this.integration, ["worktree", "remove", "--force", path]);

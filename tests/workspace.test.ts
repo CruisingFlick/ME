@@ -142,3 +142,29 @@ describe("Workspaces", () => {
     expect(await ws.fileCount()).toBe(2); // .gitignore and keep.txt
   });
 });
+
+describe("resuming an interrupted run", () => {
+  it("adopts a worktree left behind by a previous process", async () => {
+    const first = await ws.forTask("t1");
+    write(first, "in-progress.txt", "half-written work");
+
+    // A fresh manager over the same directory is what a resumed run sees.
+    const resumed = new Workspaces(ROOT, "run_test");
+    await resumed.init();
+    const recovered = await resumed.forTask("t1");
+
+    expect(recovered).toBe(first);
+    expect(readFileSync(join(recovered, "in-progress.txt"), "utf8")).toBe("half-written work");
+  });
+
+  it("still honours an explicit request for a fresh checkout", async () => {
+    const first = await ws.forTask("t1");
+    write(first, "in-progress.txt", "half-written work");
+
+    const resumed = new Workspaces(ROOT, "run_test");
+    await resumed.init();
+    const rebuilt = await resumed.forTask("t1", { fresh: true });
+
+    expect(existsSync(join(rebuilt, "in-progress.txt"))).toBe(false);
+  });
+});

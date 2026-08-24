@@ -29,6 +29,7 @@ Options for build:
   --workspace <dir>              Where the project is built (default: .hive/workspace)
   --parallel <n>                 Builders running at once (default: HIVE_MAX_PARALLEL)
   --dry-run                      Build and review, but contact no external service
+  --resume <run-id>              Continue an interrupted run instead of starting one
   --verbose                      Debug logging
 
 Guardrails come from the environment: HIVE_MAX_USD, HIVE_MAX_AGENT_USD,
@@ -78,6 +79,7 @@ interface Flags {
   workspace?: string;
   parallel?: string;
   "dry-run"?: boolean;
+  resume?: string;
   verbose?: boolean;
 }
 
@@ -99,22 +101,27 @@ function parseFlags(args: string[]): Flags {
 }
 
 async function build(flags: Flags): Promise<number> {
-  if (!flags.spec) {
-    process.stderr.write("--spec is required\n\n" + USAGE);
+  const resuming = typeof flags.resume === "string" && flags.resume.length > 0;
+  if (!flags.spec && !resuming) {
+    process.stderr.write("--spec is required (or --resume <run-id>)\n\n" + USAGE);
     return 2;
   }
-  const spec =
-    flags.spec === "-"
+
+  // A resumed run reads its plan from stored state, so the spec is optional.
+  const spec = !flags.spec
+    ? ""
+    : flags.spec === "-"
       ? readFileSync(0, "utf8")
       : readFileSync(flags.spec, "utf8");
 
-  if (!spec.trim()) {
+  if (!spec.trim() && !resuming) {
     process.stderr.write("the specification is empty\n");
     return 2;
   }
 
   const orchestrator = await Orchestrator.create({
     spec,
+    ...(resuming ? { runId: flags.resume, resume: true } : {}),
     provider: flags.provider,
     model: flags.model,
     reviewProvider: flags["review-provider"],

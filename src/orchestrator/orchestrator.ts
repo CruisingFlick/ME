@@ -36,6 +36,8 @@ export interface RunOptions {
   /** Plan, build, review and integrate, but do not touch any external service. */
   dryRun?: boolean;
   parallelism?: number;
+  /** Continue an interrupted run instead of starting a new one. */
+  resume?: boolean;
   config?: HiveConfig;
   providers?: ProviderRegistry;
   store?: Store;
@@ -103,7 +105,7 @@ export class Orchestrator {
     await workspaces.init();
     const workspace = workspaces.integration;
 
-    const store = options.store ?? (await openStore());
+    const store = options.store ?? (await openStore(runId));
     const ledger = new Ledger(store, runId, config.HIVE_STATE_DIR);
     const tasks = new TaskGraph(store, ledger, runId);
     await tasks.load();
@@ -137,6 +139,7 @@ export class Orchestrator {
     let status: RunReport["status"] = "succeeded";
 
     // A halt left over from a previous run would stop this one before it starts.
+    // Resuming is itself an instruction to continue, so the halt clears either way.
     this.w.kill.reset();
 
     await this.w.ledger.record("run.started", "orchestrator", {
@@ -254,6 +257,29 @@ export class Orchestrator {
   // --- phases --------------------------------------------------------------
 
   private async plan(): Promise<Plan> {
+    // A resumed run already has its plan; re-planning would discard the work
+    // that survived, which is the whole point of resuming.
+    if (this.options.resume && this.w.tasks.all().length > 0) {
+      const stored = await this.w.board.get("plan.full");
+      log.info(`resuming with ${this.w.tasks.all().length} existing task(s)`);
+      await this.w.ledger.record("run.phase", "orchestrator", { phase: "plan", resumed: true });
+      if (stored) return stored.value as Plan;
+      // The task graph is the authority; a missing plan record is cosmetic.
+      return {
+        summary: "(resumed run; original plan record unavailable)",
+        stack: {},
+        integrations: [],
+        tasks: this.w.tasks.all().map((task) => ({
+          id: task.id,
+          title: task.title,
+          brief: task.brief,
+          paths: task.paths,
+          dependsOn: task.dependsOn,
+          role: task.role as "builder",
+        })),
+      };
+    }
+
     await this.w.ledger.record("run.phase", "orchestrator", { phase: "plan" });
 
     const architect = this.agent("architect-1", "architect", this.builderProvider, this.builderModel);
@@ -322,6 +348,7 @@ export class Orchestrator {
     if (cycles.length > 0) {
       throw new Error(`plan contains a dependency cycle: ${cycles[0]?.join(" -> ")}`);
     }
+    await this.w.board.put("plan.full", plan, "architect-1");
     await this.w.board.put("plan.summary", plan.summary, "architect-1");
     await this.w.board.put("plan.stack", plan.stack, "architect-1");
     log.info(`plan adopted: ${plan.tasks.length} tasks`);
@@ -330,6 +357,19 @@ export class Orchestrator {
   /** Build and review every task, respecting dependencies and file ownership. */
   private async execute(): Promise<{ done: number; failed: number }> {
     await this.w.ledger.record("run.phase", "orchestrator", { phase: "execute" });
+
+    // A task that was mid-flight when the process died has no agent behind it
+    // any more. Its worktree survives, so returning it to the ready set resumes
+    // the work rather than restarting it.
+    for (const task of this.w.tasks.byStatus("in_progress", "in_review")) {
+      await this.w.tasks.update(task.id, {
+        status: "changes_requested",
+        feedback:
+          task.feedback ??
+          "This task was interrupted before it finished. Your previous work is still in your checkout; continue from there.",
+      });
+      log.info(`recovered interrupted task ${task.id}`);
+    }
 
     let guard = 0;
     const guardLimit = this.w.tasks.all().length * (this.config.HIVE_MAX_REVIEW_ROUNDS + 2) + 10;
@@ -429,6 +469,8 @@ export class Orchestrator {
     }
 
     if (signal !== "complete_task") {
+      // finishUnsignalled throws for a halt or an exhausted budget, which leaves
+      // the worktree intact on purpose: that work is what a resume recovers.
       await this.finishUnsignalled(task.id, builderId, outcome);
       await this.w.workspaces.discardTask(task.id);
       return;
@@ -573,17 +615,33 @@ export class Orchestrator {
     };
   }
 
+  /**
+   * Close out a task whose agent stopped without saying why.
+   *
+   * A halt or an exhausted budget is a fact about the *run*, not a judgement on
+   * the task: the work in its worktree may be perfectly good. Those leave the
+   * task recoverable so a resumed run picks it back up, and stop the run itself.
+   * Anything else is the task's own failure and is abandoned.
+   */
   private async finishUnsignalled(taskId: string, actor: string, outcome: AgentOutcome): Promise<void> {
+    if (outcome.kind === "halted" || outcome.kind === "budget") {
+      const reason =
+        outcome.kind === "halted"
+          ? `the run was halted while this task was in flight: ${outcome.text}`
+          : `the run's spend or time cap was reached while this task was in flight: ${outcome.text}`;
+      await this.w.tasks.update(taskId, { status: "changes_requested", feedback: reason }, actor);
+      // Trip the switch so every other in-flight agent unwinds too, instead of
+      // each one discovering the same exhausted budget separately.
+      this.w.kill.trip(reason);
+      this.w.kill.assertLive();
+      return;
+    }
+
     const reason =
-      outcome.kind === "budget"
-        ? `the run's spend or time cap was reached: ${outcome.text}`
-        : outcome.kind === "halted"
-          ? `the run was halted: ${outcome.text}`
-          : outcome.kind === "turn_limit"
-            ? `the builder used all ${outcome.turns} of its turns without finishing`
-            : `the builder ended without completing (${outcome.kind}): ${outcome.text.slice(0, 500)}`;
+      outcome.kind === "turn_limit"
+        ? `the builder used all ${outcome.turns} of its turns without finishing`
+        : `the builder ended without completing (${outcome.kind}): ${outcome.text.slice(0, 500)}`;
     await this.w.tasks.update(taskId, { status: "abandoned", feedback: reason }, actor);
-    if (outcome.kind === "halted") this.w.kill.assertLive();
   }
 
   /** Run one agent for a whole phase (integration, ship) and report the outcome. */

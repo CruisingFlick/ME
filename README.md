@@ -54,12 +54,33 @@ notes
 ```
 
 Providers ship for Anthropic (default, `claude-opus-5`), OpenAI, Gemini, a mock
-for tests, and locally installed agent CLIs (`claude`, `codex`, `gemini`) driven
-as subprocesses. Pick per run:
+for tests, and locally installed agent CLIs. Pick per run:
 
 ```bash
 npm run hive -- build --spec spec.md --provider anthropic --review-provider gemini
 ```
+
+### Running with no API key at all
+
+If you have the Claude Code CLI installed and logged in, that is enough — the
+whole swarm runs through it, billed to your existing subscription:
+
+```bash
+npm run hive -- build --spec examples/greeting-lib.md --provider claude-code
+```
+
+A CLI-backed agent works differently from the API providers, and the difference
+is worth understanding. The API providers hand back tool calls for the hive to
+execute and gate. The CLI runs *its own* tool loop in its own process, so it is
+instead handed a worktree and a restricted tool set, does the work itself, and
+reports back a structured verdict that the hive turns into the same control
+signal a tool call would have produced.
+
+What you keep: worktree confinement, role-based tool limits (mapped onto the
+CLI's own tool names), real measured spend, and every guardrail in the
+orchestrator. What you give up: the policy engine cannot inspect individual
+commands *inside* a CLI agent, because it never sees them. Prefer an API
+provider when that matters.
 
 ## Isolation
 
@@ -191,10 +212,9 @@ mid-plan) reproducible in tests.
 
 ## Honest limits
 
-- **CLI-backed agents can plan and review, not build.** A CLI agent runs its own
-  tool loop in its own process, so the hive cannot gate its tool calls or see its
-  spend. `hive plan --provider claude-code` works today and needs no API key;
-  building through a CLI agent does not.
+- **The policy engine cannot see inside a CLI-backed agent.** It runs its own
+  tool loop, so command inspection does not apply there — only its worktree and
+  its allowed tool list constrain it. Use an API provider where that matters.
 - **A run is not resumable.** State persists to Postgres, but there is no
   `hive resume <run-id>` that picks a half-finished run back up.
 - **OpenAI and Gemini costs are estimates.** Only Anthropic rates are in the
