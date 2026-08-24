@@ -226,7 +226,7 @@ way to try a new spec.
 ## Development
 
 ```bash
-npm test          # 52 tests: guardrails, coordination, and a scripted end-to-end run
+npm test          # 89 tests: guardrails, coordination, isolation, live-run regressions
 npm run typecheck
 npm run demo      # a full run against the mock provider, no API key needed
 ```
