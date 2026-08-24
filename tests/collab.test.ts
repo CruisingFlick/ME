@@ -83,3 +83,30 @@ describe("Blackboard", () => {
     expect(rendered).toContain("create table x()");
   });
 });
+
+describe("Blackboard secrecy", () => {
+  it("names a credential entry without broadcasting its value", async () => {
+    const { board } = await wire();
+    await board.put(
+      "infra.database",
+      { connectionUri: "postgres://user:hunter2@db.example/neondb" },
+      "operator-1",
+    );
+    await board.put("plan.stack", { runtime: "node" }, "architect-1");
+
+    // The board is rendered into every agent's prompt on every turn, so a
+    // password here would otherwise reach every model repeatedly.
+    const rendered = await board.render();
+    expect(rendered).toContain("infra.database");
+    expect(rendered).not.toContain("hunter2");
+    expect(rendered).toContain("plan.stack");
+    expect(rendered).toContain("node");
+  });
+
+  it("still returns the full value to an agent that asks for it", async () => {
+    const { board } = await wire();
+    await board.put("infra.database", { connectionUri: "postgres://u:pw@h/db" }, "operator-1");
+    const entry = await board.get("infra.database");
+    expect(JSON.stringify(entry?.value)).toContain("pw");
+  });
+});

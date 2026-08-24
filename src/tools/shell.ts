@@ -93,6 +93,9 @@ function exec(command: string, cwd: string, timeoutMs: number): Promise<ExecResu
         RAILWAY_TOKEN: "",
         CLERK_SECRET_KEY: "",
         RESEND_API_KEY: "",
+        // The hive's own state database is not the built project's database.
+        HIVE_DATABASE_URL: "",
+        GH_TOKEN: "",
         CI: "1",
       },
     });

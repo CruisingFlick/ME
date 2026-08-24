@@ -171,6 +171,52 @@ terminal state and a recorded reason:
 The execute loop also carries an iteration guard. A guard that never fires costs
 nothing; a swarm that spins overnight costs real money.
 
+### Interruption is expected, not exceptional
+
+An unattended run is exactly the kind of thing that gets killed halfway: a
+laptop sleeps, a container is reclaimed, a budget runs out. So the question is
+not whether a run survives its process but what it costs to continue.
+
+State goes to local disk by default rather than needing Postgres first —
+requiring a database to make resumption possible would mean nobody has it. The
+part that took the most care is what a resume *keeps*: the plan (re-planning
+would discard the surviving work), completed tasks (rebuilding them is the
+expensive mistake), and the worktrees of interrupted tasks (that half-finished
+work is the whole point).
+
+That last one drove a behavioural change elsewhere. A halt or an exhausted
+budget used to abandon whatever was in flight, which is wrong: those are facts
+about the *run*, and the code in the worktree may be perfectly good. Both now
+leave the task recoverable and stop the run by tripping the kill switch, so the
+other in-flight agents unwind at once instead of each independently rediscovering
+the same exhausted budget.
+
+### Secrets and the broadcast channel
+
+The blackboard is injected into every agent's context on every turn. That is
+what makes it useful, and it is also why a database connection string published
+there would be sent to every model in the swarm, repeatedly, for the rest of the
+run.
+
+So the rendered view names sensitive keys without showing their values, and an
+agent that needs one fetches it deliberately with `board_read`. The distinction
+worth preserving is between a fact everyone should have (the schema, the API
+shape) and a capability only one agent needs (the credential to reach it).
+
+### A CLI agent is a different kind of member
+
+Most providers return tool calls for the hive to execute, which is what makes
+the policy engine possible. A CLI-backed agent runs its own harness, so that
+inversion does not apply: it is given a worktree and a restricted tool set, does
+the work itself, and reports a structured verdict that is parsed into the same
+control signal a tool call would have produced. The orchestrator needed no
+changes to accommodate it, which is the useful test of whether the provider
+abstraction was drawn in the right place.
+
+The honest cost: the hive never sees the individual commands such an agent runs,
+so command inspection does not apply inside it. Worktree confinement and the
+role's tool list still do. Prefer an API provider where that gap matters.
+
 ### Ledger in two places
 
 Every event is appended to Postgres *and* to a JSONL file. The file exists because
@@ -182,7 +228,7 @@ watch an unattended run.
 ```
 src/
   kernel/       ledger, bus, blackboard, tasks, budget, policy, killswitch,
-                workspace (git worktrees), store
+                workspace (git worktrees), store (file | postgres | memory)
   providers/    anthropic, openai, gemini, cli, mock, registry, pricing
   agents/       role prompts and the turn loop
   tools/        fs, shell, collaboration, integrations, per-role registry

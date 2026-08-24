@@ -150,6 +150,14 @@ environment of every command an agent runs.
 **Confinement.** Filesystem tools resolve every path against the run's workspace
 and refuse anything that escapes it.
 
+**Secrets stay off the broadcast channel.** The blackboard is rendered into
+every agent's context on every turn, so a value under a key that looks like a
+credential (`infra.database`, anything matching password / token / connection /
+secret) is named but withheld. An agent that genuinely needs one asks for it
+with `board_read`. Provider credentials are also blanked from the environment of
+every command an agent runs — including the hive's own state database, which is
+not the built project's database.
+
 **Convergence.** A review loop that will not settle is stopped after
 `HIVE_MAX_REVIEW_ROUNDS`. A task whose dependency was abandoned is abandoned
 rather than waited on. A reviewer that talks without rendering a verdict counts
@@ -159,6 +167,26 @@ as *request changes*, never as approval.
 each model call and each tool call. It is a file rather than a signal precisely so
 you can stop a run from any shell, even one that has stopped responding.
 
+## Durability
+
+Run state — tasks, blackboard, messages, ledger — is written to local disk under
+`.hive/state/<run-id>/`, so a run that loses its process has not lost what it
+knew. Writes go through a temp file and a rename, and a torn final ledger line
+is skipped rather than discarding the whole log.
+
+```bash
+npm run hive -- build --resume run_1b5ae5e47345
+```
+
+A resumed run reuses the stored plan instead of re-planning, does not rebuild
+tasks that already landed, and **adopts the worktrees of tasks that were in
+flight** — the interrupted work is the thing worth recovering. A halt or an
+exhausted budget leaves its in-flight tasks recoverable rather than abandoning
+them: that is a fact about the run, not a judgement on the task.
+
+Set `HIVE_DATABASE_URL` to a Neon branch instead when several machines share a
+run.
+
 ## Configuration
 
 Everything is environment variables — see `.env.example`, which is annotated.
@@ -166,13 +194,11 @@ Nothing is mandatory except one model provider. A service without credentials
 reports itself unavailable, and the operator agent routes around it and records
 the gap instead of pretending it deployed.
 
-Set `HIVE_DATABASE_URL` to a Neon branch to make run state durable; without it a
-run keeps state in memory and is lost if the process dies.
-
 ## Commands
 
 ```
 hive build --spec <file>   Plan, build, review, integrate and ship
+hive build --resume <id>   Continue an interrupted run
 hive plan  --spec <file>   Produce and validate a plan only, and stop
 hive doctor                What is configured, what is granted, what is withheld
 hive verify                Prove every credential works, with real read-only calls

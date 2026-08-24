@@ -49,6 +49,11 @@ export class Blackboard {
   /**
    * A compact view of the board for a prompt. Values are truncated rather than
    * dropped so an agent can still see that a key exists and ask for it in full.
+   *
+   * Sensitive values are named but not shown. The board is rendered into every
+   * agent's context on every turn, so a database password published here would
+   * otherwise be sent to every model in the swarm, repeatedly, for the rest of
+   * the run. An agent that genuinely needs one asks for it with board_read.
    */
   async render(maxCharsPerEntry = 1200): Promise<string> {
     const entries = await this.list();
@@ -56,9 +61,20 @@ export class Blackboard {
     return entries
       .sort((a, b) => a.key.localeCompare(b.key))
       .map((e) => {
+        const header = `## ${e.key}  (v${e.version}, by ${e.author})`;
+        if (isSensitive(e.key)) {
+          return `${header}\n(withheld - contains credentials; read it with board_read if your task needs it)`;
+        }
         const text = typeof e.value === "string" ? e.value : JSON.stringify(e.value, null, 2);
-        return `## ${e.key}  (v${e.version}, by ${e.author})\n${truncate(text, maxCharsPerEntry)}`;
+        return `${header}\n${truncate(text, maxCharsPerEntry)}`;
       })
       .join("\n\n");
   }
+}
+
+const SENSITIVE_KEY = /secret|credential|password|connection|token|api[._-]?key|\bdsn\b|infra\.database/i;
+
+/** Keys whose values are withheld from the broadcast view of the board. */
+export function isSensitive(key: string): boolean {
+  return SENSITIVE_KEY.test(key);
 }
