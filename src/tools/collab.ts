@@ -162,6 +162,11 @@ export const completeTaskTool: HiveTool = {
           description: "What you changed and why, for the reviewer",
         },
         files_changed: { type: "array", items: { type: "string" } },
+        no_changes_needed: {
+          type: "boolean",
+          description:
+            "Set true only if the task was genuinely satisfied without editing any file - for example the work was already present and correct. Your summary must then say how you established that. A reviewer checks the claim.",
+        },
       },
       required: ["summary"],
       additionalProperties: false,
@@ -173,6 +178,7 @@ export const completeTaskTool: HiveTool = {
       payload: {
         summary: str(input, "summary"),
         filesChanged: strArray(input, "files_changed"),
+        noChangesNeeded: input.no_changes_needed === true,
       },
     });
   },

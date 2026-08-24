@@ -1,0 +1,281 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { delimiter, join } from "node:path";
+import { parseJsonLoose, truncate } from "../util/json.js";
+import { logger } from "../util/log.js";
+import {
+  ProviderError,
+  type CompletionRequest,
+  type CompletionResult,
+  type ModelProvider,
+  type ToolCall,
+  type ToolSpec,
+} from "./types.js";
+
+const log = logger("provider:claude-cli");
+
+/** The agent must end its output with this marker followed by a JSON verdict. */
+const MARKER = "<<<HIVE_RESULT>>>";
+
+/**
+ * Map hive tools onto the CLI's own tool names.
+ *
+ * A CLI agent cannot call hive tools - it has its own harness - so the closest
+ * we get to a capability grant is restricting which of *its* tools it may use.
+ * Tools with no equivalent (the bus, the blackboard) are simply unavailable to
+ * a CLI-backed agent, which is why they are told to put everything that matters
+ * into their final report instead.
+ */
+const TOOL_MAP: Record<string, string[]> = {
+  read_file: ["Read"],
+  list_files: ["Glob", "Grep"],
+  write_file: ["Write", "Edit"],
+  run_command: ["Bash"],
+};
+
+/**
+ * Drives the locally installed `claude` CLI as a full member of the swarm.
+ *
+ * The other providers hand back tool calls for the hive to execute. This one
+ * runs its own tool loop in its own process, so the deal is different: it is
+ * given a worktree and a restricted tool set, it does the work itself, and it
+ * reports back through a structured verdict the hive parses into the same
+ * control signal a tool call would have produced.
+ *
+ * The tradeoff is explicit. The hive cannot inspect individual commands this
+ * agent runs, so the policy engine's command rules do not apply inside it.
+ * What still holds: it runs in the task's own worktree, it only gets the CLI
+ * tools its role maps to, and its spend is real and accounted for.
+ */
+export class ClaudeCliProvider implements ModelProvider {
+  readonly id = "claude-code";
+  readonly defaultModel = process.env.HIVE_CLAUDE_CLI_MODEL ?? "sonnet";
+  private readonly binary = "claude";
+
+  available(): boolean {
+    return which(this.binary) !== null;
+  }
+
+  unavailableReason(): string | null {
+    return this.available() ? null : "the claude CLI is not on PATH";
+  }
+
+  async verify(): Promise<string> {
+    const path = which(this.binary);
+    if (!path) throw new Error("the claude CLI is not on PATH");
+    const version = await run(this.binary, ["--version"], null, 30_000);
+    if (version.code !== 0) {
+      throw new Error(`claude --version exited ${version.code}: ${version.stderr.slice(0, 200)}`);
+    }
+    return `${path} (${version.stdout.trim()}), model ${this.defaultModel}`;
+  }
+
+  async complete(model: string, request: CompletionRequest): Promise<CompletionResult> {
+    const signalTools = request.tools.filter((tool) => SIGNAL_TOOLS.has(tool.name));
+    const prompt = renderPrompt(request, signalTools);
+    const allowed = allowedToolsFor(request.tools);
+
+    const args = [
+      "-p",
+      prompt,
+      "--output-format",
+      "json",
+      // Edits are pre-approved; nothing else is. There is nobody to answer a
+      // permission prompt, so an un-approved tool must fail rather than hang.
+      "--permission-mode",
+      "acceptEdits",
+      "--max-turns",
+      String(process.env.HIVE_CLAUDE_CLI_MAX_TURNS ?? 40),
+      "--model",
+      model,
+      ...(allowed.length > 0 ? ["--allowedTools", ...allowed] : []),
+    ];
+
+    const result = await run(this.binary, args, null, 25 * 60 * 1000, request.cwd);
+    if (result.code !== 0 && !result.stdout.trim().startsWith("{")) {
+      throw new ProviderError(
+        `claude exited ${result.code}: ${truncate(result.stderr || result.stdout, 500)}`,
+        this.id,
+        result.code === 124,
+      );
+    }
+
+    let payload: CliResult;
+    try {
+      payload = parseJsonLoose<CliResult>(result.stdout);
+    } catch {
+      throw new ProviderError(
+        `could not parse claude CLI output: ${truncate(result.stdout, 300)}`,
+        this.id,
+        false,
+      );
+    }
+
+    if (payload.permission_denials?.length) {
+      log.warn(`${payload.permission_denials.length} tool call(s) denied by the CLI's own policy`);
+    }
+
+    const text = payload.result ?? "";
+    const usage = payload.usage ?? {};
+    const toolCalls = extractSignal(text, signalTools);
+
+    return {
+      text: stripMarker(text),
+      toolCalls,
+      stopReason: toolCalls.length > 0 ? "tool_use" : payload.is_error ? "other" : "end",
+      usage: {
+        inputTokens: usage.input_tokens ?? 0,
+        outputTokens: usage.output_tokens ?? 0,
+        cachedInputTokens: usage.cache_read_input_tokens ?? 0,
+        // The CLI reports what it actually spent, so this is measured rather
+        // than estimated - unlike the token-table costing the API providers use.
+        costUsd: payload.total_cost_usd ?? 0,
+      },
+    };
+  }
+}
+
+interface CliResult {
+  result?: string;
+  is_error?: boolean;
+  total_cost_usd?: number;
+  num_turns?: number;
+  permission_denials?: unknown[];
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+}
+
+const SIGNAL_TOOLS = new Set(["complete_task", "block_task", "submit_review"]);
+
+function allowedToolsFor(tools: ToolSpec[]): string[] {
+  const allowed = new Set<string>();
+  for (const tool of tools) {
+    for (const mapped of TOOL_MAP[tool.name] ?? []) allowed.add(mapped);
+  }
+  return [...allowed];
+}
+
+/**
+ * Turn the swarm's tool-call protocol into something a CLI agent can satisfy:
+ * do the work with your own tools, then declare the outcome in one JSON object.
+ */
+function renderPrompt(request: CompletionRequest, signalTools: ToolSpec[]): string {
+  const transcript = request.messages
+    .map((turn) => {
+      const body = turn.content
+        .map((part) => {
+          if (part.type === "text") return part.text;
+          if (part.type === "tool_call") return `[you called ${part.name}]`;
+          return `[result] ${part.content}`;
+        })
+        .join("\n");
+      return `### ${turn.role}\n${body}`;
+    })
+    .join("\n\n");
+
+  const sections = [request.system, transcript];
+
+  if (signalTools.length > 0) {
+    sections.push(
+      [
+        "## How to report your result",
+        "",
+        "You are running as an agent inside a larger swarm. Do the work directly with your own",
+        "tools - read, write and run commands in the current directory, which is your own isolated",
+        "checkout of the project. Nobody will read prose you write, so when you are finished, end",
+        `your output with the marker ${MARKER} on its own line, followed by exactly one JSON object`,
+        "and nothing after it. Choose the object that matches your outcome:",
+        "",
+        ...signalTools.map((tool) => `- ${describeSignal(tool.name)}`),
+        "",
+        "The JSON is the only part of your output that is read. If you omit it, your work is",
+        "treated as unfinished.",
+      ].join("\n"),
+    );
+  }
+
+  return sections.filter(Boolean).join("\n\n");
+}
+
+function describeSignal(name: string): string {
+  switch (name) {
+    case "complete_task":
+      return `finished the work: {"signal":"complete_task","summary":"what you changed and why, for the reviewer"}`;
+    case "block_task":
+      return `genuinely cannot proceed: {"signal":"block_task","reason":"what is blocking you","needs":"what would unblock it"}`;
+    case "submit_review":
+      return `reviewed the work: {"signal":"submit_review","verdict":"approve" or "request_changes","summary":"specific findings, each with the file and what to do"}`;
+    default:
+      return `{"signal":"${name}"}`;
+  }
+}
+
+/** Recover the verdict from the agent's output and present it as a tool call. */
+function extractSignal(text: string, signalTools: ToolSpec[]): ToolCall[] {
+  const index = text.lastIndexOf(MARKER);
+  const tail = index === -1 ? text : text.slice(index + MARKER.length);
+  const permitted = new Set(signalTools.map((tool) => tool.name));
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = parseJsonLoose<Record<string, unknown>>(tail);
+  } catch {
+    if (index !== -1) log.warn("marker present but the verdict did not parse");
+    return [];
+  }
+
+  const signal = typeof parsed.signal === "string" ? parsed.signal : null;
+  if (!signal || !permitted.has(signal)) return [];
+
+  const { signal: _dropped, ...input } = parsed;
+  return [{ id: `cli_${signal}`, name: signal, input }];
+}
+
+function stripMarker(text: string): string {
+  const index = text.lastIndexOf(MARKER);
+  return (index === -1 ? text : text.slice(0, index)).trim();
+}
+
+function run(
+  binary: string,
+  args: string[],
+  stdin: string | null,
+  timeoutMs: number,
+  cwd?: string,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve) => {
+    const child = spawn(binary, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      ...(cwd ? { cwd } : {}),
+    });
+    let stdout = "";
+    let stderr = "";
+    let killed = false;
+    const timer = setTimeout(() => {
+      killed = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr: String(err), code: 127 });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, code: killed ? 124 : code ?? 1 });
+    });
+    child.stdin.end(stdin ?? "");
+  });
+}
+
+function which(binary: string): string | null {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (dir && existsSync(join(dir, binary))) return join(dir, binary);
+  }
+  return null;
+}

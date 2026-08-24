@@ -204,6 +204,41 @@ describe("Orchestrator", () => {
     expect(report.tasks[0]?.feedback).toContain("did not return a verdict");
   });
 
+  it("rejects a completion that changed nothing and did not say so", async () => {
+    const { report } = await runWith({
+      builder: () =>
+        reply("all done", [call("complete_task", { summary: "looks fine to me" })]),
+    });
+
+    expect(report.tasks[0]?.status).toBe("abandoned");
+    expect(report.tasks[0]?.feedback).toContain("no changes");
+  });
+
+  it("accepts a completion that changed nothing but declared it, after review", async () => {
+    let sawClaim = false;
+    const { report } = await runWith({
+      builder: () =>
+        reply("nothing to do", [
+          call("complete_task", {
+            summary: "the brief was already satisfied by existing code; npm test passes",
+            no_changes_needed: true,
+          }),
+        ]),
+      reviewer: (request) => {
+        // The reviewer must be told to check the claim, not handed a diff.
+        const opening = request.messages[0]?.content[0];
+        if (opening?.type === "text" && opening.text.includes("verify that claim")) sawClaim = true;
+        return reply("checked", [
+          call("submit_review", { verdict: "approve", summary: "confirmed already satisfied" }),
+        ]);
+      },
+    });
+
+    expect(sawClaim).toBe(true);
+    expect(report.tasks[0]?.status).toBe("done");
+    expect(report.status).toBe("succeeded");
+  });
+
   it("abandons a task the builder reports as blocked", async () => {
     const { report } = await runWith({
       builder: () =>

@@ -1,4 +1,5 @@
 import { AnthropicProvider } from "./anthropic.js";
+import { ClaudeCliProvider } from "./claude-cli.js";
 import { CliProvider } from "./cli.js";
 import { GeminiProvider } from "./gemini.js";
 import { MockProvider } from "./mock.js";
@@ -18,11 +19,9 @@ export function buildRegistry(): Map<string, ModelProvider> {
     new OpenAIProvider(),
     new GeminiProvider(),
     new MockProvider(),
-    new CliProvider({
-      id: "claude-code",
-      binary: "claude",
-      args: ["-p", "{PROMPT}"],
-    }),
+    // The claude CLI gets a purpose-built adapter because it can do the work
+    // itself; the others are text-only consultants.
+    new ClaudeCliProvider(),
     new CliProvider({
       id: "codex",
       binary: "codex",

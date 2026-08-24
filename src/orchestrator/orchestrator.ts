@@ -446,21 +446,33 @@ export class Orchestrator {
     });
 
     // A builder that declared completion but changed nothing has not done the
-    // task, whatever its summary says.
-    if (!commit.committed) {
+    // task - unless it explicitly says nothing needed changing, which is a real
+    // outcome for a task whose work turned out to be already present. The claim
+    // is not taken on trust: it goes to review like any other, with the reviewer
+    // told to check it.
+    const claimsNoChanges = outcome.signal?.payload.noChangesNeeded === true;
+    if (!commit.committed && !claimsNoChanges) {
       return this.rejectTask(
         task.id,
         current,
-        "You called complete_task but the checkout contains no changes. Write the files the brief asks for.",
+        "You called complete_task but the checkout contains no changes. Either make the changes the brief asks for, or set no_changes_needed and explain how you established that nothing was needed.",
       );
     }
 
     await this.w.tasks.update(task.id, { status: "in_review" }, builderId);
-    const diff = await this.w.workspaces.diffTask(task.id);
+    const diff = commit.committed
+      ? await this.w.workspaces.diffTask(task.id)
+      : "(the builder reports that no file needed to change - verify that claim)";
     const verdict = await this.review(this.w.tasks.get(task.id), summary, worktree, diff);
 
     if (!verdict.approved) {
       return this.rejectTask(task.id, this.w.tasks.get(task.id), verdict.summary);
+    }
+
+    if (!commit.committed) {
+      await this.w.tasks.update(task.id, { status: "done", feedback: verdict.summary }, "reviewer-1");
+      await this.w.workspaces.discardTask(task.id);
+      return;
     }
 
     const merge = await this.w.workspaces.mergeTask(task.id);

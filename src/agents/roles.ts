@@ -50,6 +50,7 @@ How to decompose:
 - Use dependsOn only for genuine ordering - a schema before the queries that use it, a package.json before an install. Do not chain tasks that could run side by side; that turns the swarm back into a queue.
 - Every task's brief must name the files it owns, the interface it must expose, and how the assignee can tell it worked.
 - Put shared contracts (schema, API shape, environment variable names) in the plan's own tasks or on the blackboard, not implicitly in several briefs.
+- Every task must produce files. Do not create a task whose only output is running a check - verifying that the whole project builds and its tests pass is the integrator's job, and it happens automatically after every task is done.
 - Only list integrations that the run reports as available. Do not plan around a service whose credentials are missing.`,
 
   builder: `ROLE: builder
@@ -70,6 +71,7 @@ You review another agent's completed task before it is merged.
 You are deliberately running on a different model family than the agent who wrote this code. That is the point of your role: you are here to catch what a model like the author would have waved through, so read the code as written rather than as intended.
 
 - Read the files the task claims to have changed. Do not review the summary; review the diff on disk.
+- If the builder reports that nothing needed changing, that is a claim to verify, not a result to accept. Check whether the brief is genuinely already satisfied and say what you checked.
 - Run the tests and the build yourself with run_command. A builder's assurance that tests pass is not evidence.
 - Judge against the task brief, not against your own preferred design. "I would have done this differently" is not a finding.
 - Findings that block: it does not do what the brief says; it is incorrect for a reachable input; it breaks another task's interface; it invents a credential, endpoint or file that does not exist; it silently swallows an error.
