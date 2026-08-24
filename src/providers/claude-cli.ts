@@ -75,9 +75,12 @@ export class ClaudeCliProvider implements ModelProvider {
     const prompt = renderPrompt(request, signalTools);
     const allowed = allowedToolsFor(request.tools);
 
+    // The prompt goes on stdin, not in argv. A reviewer's prompt carries the
+    // whole diff plus the blackboard, and an argument list has a hard size
+    // limit that a large task would eventually cross - as an exec failure that
+    // looks nothing like the cause.
     const args = [
       "-p",
-      prompt,
       "--output-format",
       "json",
       // Edits are pre-approved; nothing else is. There is nobody to answer a
@@ -91,7 +94,7 @@ export class ClaudeCliProvider implements ModelProvider {
       ...(allowed.length > 0 ? ["--allowedTools", ...allowed] : []),
     ];
 
-    const result = await run(this.binary, args, null, 25 * 60 * 1000, request.cwd);
+    const result = await run(this.binary, args, prompt, 25 * 60 * 1000, request.cwd);
     if (result.code !== 0 && !result.stdout.trim().startsWith("{")) {
       throw new ProviderError(
         `claude exited ${result.code}: ${truncate(result.stderr || result.stdout, 500)}`,
@@ -176,27 +179,40 @@ function renderPrompt(request: CompletionRequest, signalTools: ToolSpec[]): stri
     })
     .join("\n\n");
 
-  const sections = [request.system, transcript];
+  // The protocol block goes before the transcript on purpose: the last thing an
+  // agent reads should be its actual assignment, not the reporting format.
+  const sections: string[] = [request.system];
 
   if (signalTools.length > 0) {
+    const building = signalTools.some((tool) => tool.name === "complete_task");
     sections.push(
       [
-        "## How to report your result",
+        "## Do the work, then report",
         "",
-        "You are running as an agent inside a larger swarm. Do the work directly with your own",
-        "tools - read, write and run commands in the current directory, which is your own isolated",
-        "checkout of the project. Nobody will read prose you write, so when you are finished, end",
-        `your output with the marker ${MARKER} on its own line, followed by exactly one JSON object`,
-        "and nothing after it. Choose the object that matches your outcome:",
+        "You are an agent inside a larger swarm. The current directory is your own isolated",
+        "checkout of the project. Use your own tools to do the work here: read the existing code,",
+        "write the files, run the build and the tests.",
+        "",
+        ...(building
+          ? [
+              "Reporting completion is not completing. Your checkout is inspected after you finish:",
+              "if you declare the task done and no file has changed, the report is rejected and the",
+              "task is sent back to you, which wastes a round for nothing. Write the files first.",
+              "",
+            ]
+          : []),
+        `When - and only when - the work is actually done, end your output with ${MARKER} on its`,
+        "own line, followed by exactly one JSON object and nothing after it:",
         "",
         ...signalTools.map((tool) => `- ${describeSignal(tool.name)}`),
         "",
-        "The JSON is the only part of your output that is read. If you omit it, your work is",
-        "treated as unfinished.",
+        "That JSON is the only part of your output anyone reads. Omit it and your work is treated",
+        "as unfinished, however much of it you did.",
       ].join("\n"),
     );
   }
 
+  sections.push(transcript);
   return sections.filter(Boolean).join("\n\n");
 }
 
