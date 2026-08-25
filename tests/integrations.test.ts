@@ -120,3 +120,46 @@ describe("capability gating on integration tools", () => {
     }
   });
 });
+
+describe("GitHub availability", () => {
+  it("needs both a token and a repository to be usable", async () => {
+    const { GitHub } = await import("../src/integrations/github.js");
+    const github = new GitHub();
+
+    // Neither is set in this test environment.
+    expect(github.available()).toBe(false);
+    expect(github.unavailableReason()).toContain("GITHUB_TOKEN");
+
+    process.env.GITHUB_TOKEN = "ghp_test";
+    resetConfig();
+    // A token alone is not a usable integration: every operation needs a repo,
+    // and reporting it available sends agents down a path where inventing a
+    // repository name looks reasonable.
+    expect(github.available()).toBe(false);
+    expect(github.unavailableReason()).toContain("GITHUB_REPO");
+
+    process.env.GITHUB_REPO = "owner/repo";
+    resetConfig();
+    expect(github.available()).toBe(true);
+    expect(github.defaultRepo()).toEqual({ owner: "owner", repo: "repo" });
+
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_REPO;
+    resetConfig();
+  });
+
+  it("rejects a malformed repo slug rather than half-using it", async () => {
+    const { GitHub } = await import("../src/integrations/github.js");
+    process.env.GITHUB_TOKEN = "ghp_test";
+    process.env.GITHUB_REPO = "not-a-slug";
+    resetConfig();
+
+    const github = new GitHub();
+    expect(github.defaultRepo()).toBeNull();
+    expect(github.available()).toBe(false);
+
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_REPO;
+    resetConfig();
+  });
+});

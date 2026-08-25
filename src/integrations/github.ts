@@ -1,5 +1,5 @@
 import { getConfig } from "../config.js";
-import { request } from "./http.js";
+import { IntegrationError, request } from "./http.js";
 
 const API = "https://api.github.com";
 
@@ -70,22 +70,53 @@ export class GitHub {
   }
 
   async createBranch(ref: RepoRef, branch: string, fromSha?: string): Promise<string> {
-    let sha = fromSha;
-    if (!sha) {
-      const repo = await this.getRepo(ref);
-      const head = await request<{ object: { sha: string } }>(
-        "github",
-        `${API}/repos/${ref.owner}/${ref.repo}/git/ref/heads/${repo.default_branch}`,
-        { headers: this.headers() },
-      );
-      sha = head.object.sha;
-    }
+    const sha = fromSha ?? (await this.baseSha(ref));
     await request("github", `${API}/repos/${ref.owner}/${ref.repo}/git/refs`, {
       method: "POST",
       headers: this.headers(),
       body: { ref: `refs/heads/${branch}`, sha },
     });
     return branch;
+  }
+
+  /**
+   * The commit a new branch should start from.
+   *
+   * A repository created without a README has no commits at all, so its default
+   * branch is a name with nothing behind it and every ref lookup 404s. That is
+   * the state a fresh destination repo is usually in, so rather than requiring
+   * whoever set it up to have remembered a README, give it an initial commit.
+   */
+  private async baseSha(ref: RepoRef): Promise<string> {
+    const repo = await this.getRepo(ref);
+    const refUrl = `${API}/repos/${ref.owner}/${ref.repo}/git/ref/heads/${repo.default_branch}`;
+    try {
+      const head = await request<{ object: { sha: string } }>("github", refUrl, {
+        headers: this.headers(),
+        retries: 1,
+      });
+      return head.object.sha;
+    } catch (err) {
+      if (!(err instanceof IntegrationError) || err.status !== 404) throw err;
+    }
+
+    const created = await request<{ commit: { sha: string } }>(
+      "github",
+      `${API}/repos/${ref.owner}/${ref.repo}/contents/README.md`,
+      {
+        method: "PUT",
+        headers: this.headers(),
+        body: {
+          message: "hive: initialise repository",
+          content: Buffer.from(
+            `# ${ref.repo}\n\nProjects built by the hive land here.\n`,
+            "utf8",
+          ).toString("base64"),
+          branch: repo.default_branch,
+        },
+      },
+    );
+    return created.commit.sha;
   }
 
   /** Create or update a single file on a branch. */
