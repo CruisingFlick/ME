@@ -263,8 +263,12 @@ function run(
   cwd?: string,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const child = spawn(binary, args, {
+    // Node refuses to spawn a .cmd without a shell, and the resolved path is
+    // what exists on disk - the bare name may not.
+    const executable = which(binary) ?? binary;
+    const child = spawn(executable, args, {
       stdio: ["pipe", "pipe", "pipe"],
+      shell: process.platform === "win32",
       ...(cwd ? { cwd } : {}),
     });
     let stdout = "";
@@ -289,9 +293,24 @@ function run(
   });
 }
 
+/**
+ * Find an executable on PATH, the way the platform actually names them.
+ *
+ * On Windows an npm-installed CLI is `claude.cmd`, not `claude`, so looking for
+ * the bare name finds nothing and the provider reports itself missing however
+ * correctly it was installed.
+ */
 function which(binary: string): string | null {
+  const extensions =
+    process.platform === "win32"
+      ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+      : [""];
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (dir && existsSync(join(dir, binary))) return join(dir, binary);
+    if (!dir) continue;
+    for (const extension of extensions) {
+      const candidate = join(dir, binary + extension);
+      if (existsSync(candidate)) return candidate;
+    }
   }
   return null;
 }
