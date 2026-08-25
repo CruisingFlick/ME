@@ -2,7 +2,30 @@ import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 import type { Capability } from "./types.js";
 
-loadDotenv({ quiet: true });
+/**
+ * Keys whose value came from .env rather than the ambient environment.
+ *
+ * Recorded so `doctor` can show where each credential was read from. A stale
+ * variable left in a shell silently shadowing the .env someone just edited is
+ * a miserable thing to debug from a 401 alone.
+ */
+const fromDotenv = new Set<string>();
+
+/**
+ * .env wins over the ambient environment, which is the opposite of dotenv's
+ * default. For a CLI whose configuration file *is* .env, a forgotten export
+ * shadowing the file the user just edited is the more likely mistake by far -
+ * and deployments inject real environment variables without shipping a .env,
+ * so nothing is overridden there.
+ */
+const parsed = loadDotenv({ quiet: true, override: true });
+for (const key of Object.keys(parsed.parsed ?? {})) fromDotenv.add(key);
+
+/** Where a configuration value was read from, for diagnostics. */
+export function sourceOf(key: string): ".env" | "environment" | "default" {
+  if (fromDotenv.has(key)) return ".env";
+  return process.env[key] !== undefined ? "environment" : "default";
+}
 
 /**
  * Everything the hive can be told about the outside world lives here.

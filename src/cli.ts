@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { getConfig } from "./config.js";
+import { getConfig, sourceOf } from "./config.js";
 import { KillSwitch } from "./kernel/killswitch.js";
 import { buildIntegrations, integrationStatus } from "./integrations/index.js";
 import { Orchestrator, type RunReport } from "./orchestrator/orchestrator.js";
@@ -219,8 +219,19 @@ async function doctor(): Promise<number> {
   }
 
   lines.push("", "services");
+  const CREDENTIAL: Record<string, string> = {
+    github: "GITHUB_TOKEN",
+    neon: "NEON_API_KEY",
+    railway: "RAILWAY_TOKEN",
+    clerk: "CLERK_SECRET_KEY",
+    resend: "RESEND_API_KEY",
+  };
   for (const [name, state] of Object.entries(integrationStatus(integrations))) {
-    lines.push(`  ${state === "available" ? "ok" : "--"}  ${name.padEnd(12)} ${state}`);
+    // Where the credential came from, so a stale shell variable shadowing the
+    // .env someone just edited is visible here rather than only as a 401.
+    const key = CREDENTIAL[name];
+    const from = key && state === "available" ? `  [from ${sourceOf(key)}]` : "";
+    lines.push(`  ${state === "available" ? "ok" : "--"}  ${name.padEnd(12)} ${state}${from}`);
   }
 
   lines.push("", "guardrails");
