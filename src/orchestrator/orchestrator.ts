@@ -38,6 +38,8 @@ export interface RunOptions {
   parallelism?: number;
   /** Continue an interrupted run instead of starting a new one. */
   resume?: boolean;
+  /** Put abandoned tasks back in the queue; use when the cause was not the task. */
+  retryAbandoned?: boolean;
   config?: HiveConfig;
   providers?: ProviderRegistry;
   store?: Store;
@@ -134,6 +136,40 @@ export class Orchestrator {
     return new Orchestrator(runId, options, config, workspace, store, w);
   }
 
+  /**
+   * Return abandoned tasks to the queue when asked.
+   *
+   * Abandonment is terminal by design - it is how a run stops paying for work
+   * that will not converge. But a task abandoned because the provider could not
+   * authenticate was never judged at all, and without this the only way to
+   * retry it is to discard every task that did succeed.
+   */
+  private async reviveAbandoned(): Promise<void> {
+    if (!this.options.retryAbandoned) return;
+    for (const task of this.w.tasks.byStatus("abandoned")) {
+      await this.w.tasks.update(task.id, {
+        status: "pending",
+        reviewRounds: 0,
+        feedback: undefined,
+      });
+      log.info(`revived abandoned task ${task.id}`);
+    }
+  }
+
+  /** Restore the provider choices a resumed run was originally started with. */
+  private async restoreConfig(): Promise<void> {
+    if (!this.options.resume) return;
+    const stored = await this.w.board.get("run.config");
+    if (!stored) return;
+    const config = stored.value as Partial<Record<string, string>>;
+    // An explicit flag still wins; this only fills in what was not given.
+    this.options.provider ??= config.provider;
+    this.options.model ??= config.model;
+    this.options.reviewProvider ??= config.reviewProvider;
+    this.options.reviewModel ??= config.reviewModel;
+    log.info(`resuming with provider ${this.options.provider ?? "(default)"}`);
+  }
+
   async run(): Promise<RunReport> {
     const phases: RunReport["phases"] = [];
     const notes: string[] = [];
@@ -144,6 +180,8 @@ export class Orchestrator {
     // A halt left over from a previous run would stop this one before it starts.
     // Resuming is itself an instruction to continue, so the halt clears either way.
     this.w.kill.reset();
+    await this.restoreConfig();
+    await this.reviveAbandoned();
 
     await this.w.ledger.record("run.started", "orchestrator", {
       workspace: this.workspace,
@@ -359,6 +397,18 @@ export class Orchestrator {
     if (cycles.length > 0) {
       throw new Error(`plan contains a dependency cycle: ${cycles[0]?.join(" -> ")}`);
     }
+    // The provider choice is part of the run, not of the command that started
+    // it: a resume that silently swaps models is a different run.
+    await this.w.board.put(
+      "run.config",
+      {
+        provider: this.builderProvider,
+        model: this.builderModel,
+        reviewProvider: this.reviewerProvider,
+        reviewModel: this.reviewerModel,
+      },
+      "orchestrator",
+    );
     await this.w.board.put("plan.full", plan, "architect-1");
     await this.w.board.put("plan.summary", plan.summary, "architect-1");
     await this.w.board.put("plan.stack", plan.stack, "architect-1");
@@ -629,17 +679,21 @@ export class Orchestrator {
   /**
    * Close out a task whose agent stopped without saying why.
    *
-   * A halt or an exhausted budget is a fact about the *run*, not a judgement on
-   * the task: the work in its worktree may be perfectly good. Those leave the
-   * task recoverable so a resumed run picks it back up, and stop the run itself.
-   * Anything else is the task's own failure and is abandoned.
+   * A halt, an exhausted budget, or a provider that cannot authenticate are all
+   * facts about the *run*, not judgements on the task: the work in its worktree
+   * may be perfectly good. Those leave the task recoverable so a resumed run
+   * picks it back up, and stop the run itself - continuing would only burn the
+   * remaining tasks against the same broken layer. Anything else is the task's
+   * own failure and is abandoned.
    */
   private async finishUnsignalled(taskId: string, actor: string, outcome: AgentOutcome): Promise<void> {
-    if (outcome.kind === "halted" || outcome.kind === "budget") {
+    if (outcome.kind === "halted" || outcome.kind === "budget" || outcome.kind === "error") {
       const reason =
         outcome.kind === "halted"
           ? `the run was halted while this task was in flight: ${outcome.text}`
-          : `the run's spend or time cap was reached while this task was in flight: ${outcome.text}`;
+          : outcome.kind === "budget"
+            ? `the run's spend or time cap was reached while this task was in flight: ${outcome.text}`
+            : `the model provider failed while this task was in flight: ${outcome.text}`;
       await this.w.tasks.update(taskId, { status: "changes_requested", feedback: reason }, actor);
       // Trip the switch so every other in-flight agent unwinds too, instead of
       // each one discovering the same exhausted budget separately.

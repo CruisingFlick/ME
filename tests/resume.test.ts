@@ -98,6 +98,21 @@ async function orchestrate(registry: ProviderRegistry, resume: boolean) {
 }
 
 describe("resuming an interrupted run", () => {
+  it("remembers the provider it was started with", async () => {
+    // A resume that silently swaps to a different model is a different run -
+    // and if that model has no credentials, it fails at once having discarded
+    // nothing but the user's time.
+    const first = await orchestrate(swarm(() => "work"), false);
+    expect(first.status).toBe("succeeded");
+
+    const store = new FileStore(STATE, RUN_ID);
+    await store.init();
+    const stored = await store.getBoard(RUN_ID, "run.config");
+
+    expect((stored?.value as { provider?: string })?.provider).toBe("mock");
+  });
+
+
   it("picks up where it stopped instead of starting over", async () => {
     const kill = new KillSwitch(STATE);
 

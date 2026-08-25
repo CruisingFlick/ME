@@ -33,6 +33,7 @@ Options for build:
   --wall-clock <minutes>         Override the run's time cap for this run only
   --review-rounds <n>            Override how many times a task may be sent back
   --resume <run-id>              Continue an interrupted run instead of starting one
+  --retry-abandoned              With --resume, requeue abandoned tasks too
   --verbose                      Debug logging
 
 Guardrails come from the environment: HIVE_MAX_USD, HIVE_MAX_AGENT_USD,
@@ -86,6 +87,7 @@ interface Flags {
   "review-rounds"?: string;
   "dry-run"?: boolean;
   resume?: string;
+  "retry-abandoned"?: boolean;
   verbose?: boolean;
 }
 
@@ -127,7 +129,13 @@ async function build(flags: Flags): Promise<number> {
 
   const orchestrator = await Orchestrator.create({
     spec,
-    ...(resuming ? { runId: flags.resume, resume: true } : {}),
+    ...(resuming
+      ? {
+          runId: flags.resume,
+          resume: true,
+          retryAbandoned: Boolean(flags["retry-abandoned"]),
+        }
+      : {}),
     provider: flags.provider,
     model: flags.model,
     reviewProvider: flags["review-provider"],
