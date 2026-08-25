@@ -230,7 +230,7 @@ hive build --spec <file>   Plan, build, review, integrate and ship
 hive build --resume <id>   Continue an interrupted run
 hive plan  --spec <file>   Produce and validate a plan only, and stop
 hive doctor                What is configured, what is granted, what is withheld
-hive verify                Prove every credential works, with real read-only calls
+hive verify [--deep]       Prove every credential works, with real read-only calls
 hive halt [reason]         Stop every run at its next checkpoint
 hive resume                Clear a halt
 hive report <run-id>       Replay a run's ledger
@@ -248,6 +248,19 @@ services
 That token was set, so `doctor` called it available. An unattended run would
 have discovered it in the ship phase, after spending the entire build budget
 getting there.
+
+`--deep` goes further and **drives each model once**, end to end — the same
+spawn, the same argument shape, the same response parsing a real run uses:
+
+```
+ok  claude-code  claude.CMD (2.1.246), model sonnet; answered in 4175ms: "READY"
+```
+
+This exists because a change to how the CLI process was spawned broke a run
+between dispatching a task and its first model call — while the shallow check,
+which only asks the binary for its version, still passed perfectly. Worth the
+few cents before an unattended run; the CLI reports its own spend, so you will
+see what the probe cost.
 
 `--dry-run` does everything except contact an external service. It is the right
 way to try a new spec.

@@ -7,7 +7,7 @@ import { Orchestrator, type RunReport } from "./orchestrator/orchestrator.js";
 import { ProviderRegistry } from "./providers/registry.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { setLogLevel } from "./util/log.js";
-import { check, type VerifyResult } from "./verify.js";
+import { check, exerciseProvider, type VerifyResult } from "./verify.js";
 
 const USAGE = `hive - an autonomous multi-model engineering swarm
 
@@ -15,7 +15,8 @@ Usage:
   hive build --spec <file>       Plan, build, review, integrate and ship a project
   hive plan --spec <file>        Produce and validate a plan only, and stop
   hive doctor                    Report which models and services are configured
-  hive verify                    Prove every credential works, with real read-only calls
+  hive verify [--deep]           Prove every credential works, with real read-only calls
+                                 --deep also drives each model once, end to end
   hive halt [reason]             Stop every run immediately
   hive resume                    Clear a halt
   hive report <run-id>           Replay a run's ledger
@@ -55,7 +56,7 @@ async function main(argv: string[]): Promise<number> {
     case "doctor":
       return doctor();
     case "verify":
-      return verify();
+      return verify(Boolean(flags.deep));
     case "halt":
       return halt(rest.join(" "));
     case "resume":
@@ -89,6 +90,7 @@ interface Flags {
   resume?: string;
   "retry-abandoned"?: boolean;
   verbose?: boolean;
+  deep?: boolean;
 }
 
 function parseFlags(args: string[]): Flags {
@@ -316,17 +318,26 @@ async function doctor(): Promise<number> {
  * say back. The difference between the two is where an unattended run fails at
  * its most expensive moment.
  */
-async function verify(): Promise<number> {
+async function verify(deep = false): Promise<number> {
   const providers = new ProviderRegistry();
   const integrations = buildIntegrations();
 
   process.stdout.write("\nprobing every configured credential with a read-only call...\n\n");
 
+  if (deep) {
+    process.stdout.write(
+      "--deep: each available model is driven once, which spends a little.\n\n",
+    );
+  }
+
   const checks: Array<Promise<VerifyResult>> = [
     ...providers.all().map((provider) =>
-      check(provider.id, "model", provider.available(), provider.unavailableReason(), () =>
-        provider.verify(),
-      ),
+      check(provider.id, "model", provider.available(), provider.unavailableReason(), async () => {
+        const shallow = await provider.verify();
+        if (!deep) return shallow;
+        // The shallow check proves it exists; this proves it can be driven.
+        return `${shallow}; ${await exerciseProvider(provider as never)}`;
+      }),
     ),
     ...Object.values(integrations).map((service) =>
       check(service.name, "service", service.available(), service.unavailableReason(), () =>

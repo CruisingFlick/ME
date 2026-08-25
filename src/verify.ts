@@ -30,6 +30,39 @@ export function isNetworkBlocked(message: string): boolean {
 
 export type Check = () => Promise<string>;
 
+/**
+ * Prove a model provider can actually be driven, not merely that it is present.
+ *
+ * The shallow check asks the CLI for its version, which proves a binary exists
+ * on PATH and nothing else. A change to how the process is spawned broke a run
+ * between dispatching a task and the first model call - with the version check
+ * still passing perfectly. This exercises the exact path a run uses: the same
+ * spawn, the same argument shape, the same response parsing.
+ */
+export async function exerciseProvider(
+  provider: {
+    id: string;
+    defaultModel: string;
+    complete(model: string, request: never): Promise<{ text: string; usage: { costUsd: number } }>;
+  },
+  model?: string,
+): Promise<string> {
+  const request = {
+    system: "You are a connectivity probe. Answer with one word and nothing else.",
+    messages: [{ role: "user", content: [{ type: "text", text: "Reply with the word READY." }] }],
+    tools: [],
+    maxTokens: 64,
+    effort: "low",
+  } as never;
+
+  const started = Date.now();
+  const result = await provider.complete(model ?? provider.defaultModel, request);
+  const elapsed = Date.now() - started;
+  const reply = result.text.trim().slice(0, 40) || "(empty reply)";
+  const cost = result.usage.costUsd > 0 ? `, $${result.usage.costUsd.toFixed(4)}` : "";
+  return `answered in ${elapsed}ms${cost}: ${JSON.stringify(reply)}`;
+}
+
 export async function check(
   name: string,
   kind: VerifyResult["kind"],
