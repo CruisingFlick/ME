@@ -263,14 +263,20 @@ function run(
   cwd?: string,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    // Node refuses to spawn a .cmd without a shell, and the resolved path is
-    // what exists on disk - the bare name may not.
+    // Node refuses to spawn a .cmd directly, and `shell: true` would concatenate
+    // the arguments unescaped. Invoking the interpreter explicitly keeps the
+    // arguments as an array, so Node quotes each one and nothing is concatenated.
     const executable = which(binary) ?? binary;
-    const child = spawn(executable, args, {
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: process.platform === "win32",
-      ...(cwd ? { cwd } : {}),
-    });
+    const viaCmd = process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
+    const child = viaCmd
+      ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", executable, ...args], {
+          stdio: ["pipe", "pipe", "pipe"],
+          ...(cwd ? { cwd } : {}),
+        })
+      : spawn(executable, args, {
+          stdio: ["pipe", "pipe", "pipe"],
+          ...(cwd ? { cwd } : {}),
+        });
     let stdout = "";
     let stderr = "";
     let killed = false;
