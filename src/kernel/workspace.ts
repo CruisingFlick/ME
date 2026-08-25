@@ -191,6 +191,18 @@ export class Workspaces {
     });
   }
 
+  /** Every tracked file at the integration head, with its contents. */
+  async filesAtHead(): Promise<Array<{ path: string; content: string }>> {
+    const listed = await this.git(this.integration, ["ls-files"]);
+    const paths = listed.stdout.split("\n").filter(Boolean);
+    const files: Array<{ path: string; content: string }> = [];
+    for (const path of paths) {
+      const blob = await this.git(this.integration, ["show", `HEAD:${path}`]);
+      if (blob.code === 0) files.push({ path, content: blob.stdout });
+    }
+    return files;
+  }
+
   async fileCount(): Promise<number> {
     const result = await this.git(this.integration, ["ls-files"]);
     return result.stdout.split("\n").filter(Boolean).length;

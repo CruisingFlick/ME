@@ -54,13 +54,53 @@ export class GitHub {
     });
     const ref = this.defaultRepo();
     if (!ref) throw new Error("GITHUB_REPO is not set (expected owner/repo)");
-    const repo = await request<{ full_name: string; default_branch: string; permissions?: { push?: boolean } }>(
+    const repo = await request<{ full_name: string; default_branch: string }>(
       "github",
       `${API}/repos/${ref.owner}/${ref.repo}`,
       { headers: this.headers(), retries: 1 },
     );
-    const push = repo.permissions?.push ? "push" : "read-only";
-    return `${me.login} -> ${repo.full_name} (default ${repo.default_branch}, ${push})`;
+
+    const write = await this.canWrite(ref);
+    if (!write.allowed) {
+      throw new Error(
+        `${me.login} can read ${repo.full_name} but the token cannot write to it (${write.detail}). ` +
+          `Set the token's Contents permission to "Read and write".`,
+      );
+    }
+    return `${me.login} -> ${repo.full_name} (default ${repo.default_branch}, write confirmed)`;
+  }
+
+  /**
+   * Prove the token can write, by creating a blob.
+   *
+   * The repository's `permissions` field is the *account's* access, not the
+   * token's, so a read-only fine-grained token on a repo you own still reports
+   * `push: true`. Reading it produced a confident green from a token that could
+   * not commit a single file - exactly the failure verification exists to catch.
+   *
+   * A blob nobody references is invisible in the UI and garbage-collected, so
+   * this stays side-effect free while testing the permission that actually
+   * matters.
+   */
+  private async canWrite(ref: RepoRef): Promise<{ allowed: boolean; detail: string }> {
+    try {
+      await request<{ sha: string }>(
+        "github",
+        `${API}/repos/${ref.owner}/${ref.repo}/git/blobs`,
+        {
+          method: "POST",
+          headers: this.headers(),
+          body: { content: "aGl2ZSB3cml0ZSBwcm9iZQ==", encoding: "base64" },
+          retries: 0,
+        },
+      );
+      return { allowed: true, detail: "blob write accepted" };
+    } catch (err) {
+      if (err instanceof IntegrationError) {
+        return { allowed: false, detail: `HTTP ${err.status}` };
+      }
+      return { allowed: false, detail: String(err) };
+    }
   }
 
   async getRepo(ref: RepoRef): Promise<{ default_branch: string; html_url: string }> {
@@ -150,6 +190,68 @@ export class GitHub {
       },
     });
     return { commit: result.commit.sha };
+  }
+
+  /**
+   * Push a whole tree as one commit, via the Git Data API.
+   *
+   * The contents endpoint commits one file at a time, which would turn a
+   * thirteen-file project into thirteen commits and make the branch history
+   * useless to whoever reviews it. This builds a tree and commits it once.
+   */
+  async pushTree(
+    ref: RepoRef,
+    branch: string,
+    files: Array<{ path: string; content: string }>,
+    message: string,
+  ): Promise<{ commit: string; branch: string }> {
+    const base = `${API}/repos/${ref.owner}/${ref.repo}`;
+    const parent = await this.baseSha(ref);
+
+    const blobs = await Promise.all(
+      files.map(async (file) => {
+        const blob = await request<{ sha: string }>("github", `${base}/git/blobs`, {
+          method: "POST",
+          headers: this.headers(),
+          body: {
+            content: Buffer.from(file.content, "utf8").toString("base64"),
+            encoding: "base64",
+          },
+        });
+        return { path: file.path, mode: "100644" as const, type: "blob" as const, sha: blob.sha };
+      }),
+    );
+
+    const tree = await request<{ sha: string }>("github", `${base}/git/trees`, {
+      method: "POST",
+      headers: this.headers(),
+      body: { base_tree: parent, tree: blobs },
+    });
+
+    const commit = await request<{ sha: string }>("github", `${base}/git/commits`, {
+      method: "POST",
+      headers: this.headers(),
+      body: { message, tree: tree.sha, parents: [parent] },
+    });
+
+    // Create the branch, or move it if a previous attempt already made it.
+    try {
+      await request("github", `${base}/git/refs`, {
+        method: "POST",
+        headers: this.headers(),
+        body: { ref: `refs/heads/${branch}`, sha: commit.sha },
+        retries: 1,
+      });
+    } catch (err) {
+      if (!(err instanceof IntegrationError) || err.status !== 422) throw err;
+      await request("github", `${base}/git/refs/heads/${branch}`, {
+        method: "PATCH",
+        headers: this.headers(),
+        body: { sha: commit.sha, force: true },
+      });
+    }
+
+    return { commit: commit.sha, branch };
   }
 
   async openPullRequest(

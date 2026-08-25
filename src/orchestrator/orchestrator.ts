@@ -51,6 +51,8 @@ export interface RunReport {
   /** Head of the integration branch when the run ended, if anything was merged. */
   head: string | null;
   filesTracked: number;
+  /** Where the work was published, when publishing was possible. */
+  published?: { branch: string; commit: string; pullRequest?: string };
   plan?: Plan;
   tasks: Task[];
   usage: Usage;
@@ -136,6 +138,7 @@ export class Orchestrator {
     const phases: RunReport["phases"] = [];
     const notes: string[] = [];
     let plan: Plan | undefined;
+    let published: RunReport["published"];
     let status: RunReport["status"] = "succeeded";
 
     // A halt left over from a previous run would stop this one before it starts.
@@ -178,6 +181,13 @@ export class Orchestrator {
       phases.push({ phase: "integrate", ok: integrated.ok, detail: integrated.detail });
       if (!integrated.ok) status = "failed";
 
+      if (!this.options.dryRun && status !== "failed") {
+        const outcome = await this.publish();
+        phases.push({ phase: "publish", ok: outcome.ok, detail: outcome.detail });
+        published = outcome.result;
+        if (!outcome.ok) status = "failed";
+      }
+
       if (this.options.dryRun) {
         phases.push({ phase: "ship", ok: true, detail: "skipped (dry run)" });
         notes.push("dry run: no external service was contacted");
@@ -185,7 +195,7 @@ export class Orchestrator {
         phases.push({ phase: "ship", ok: false, detail: "skipped (build did not reach green)" });
         notes.push("ship was skipped because an earlier phase failed");
       } else {
-        const shipped = await this.runSingle("operator", this.shipBrief());
+        const shipped = await this.runSingle("operator", this.shipBrief(published));
         phases.push({ phase: "ship", ok: shipped.ok, detail: shipped.detail });
         if (!shipped.ok) status = "failed";
       }
@@ -209,6 +219,7 @@ export class Orchestrator {
       workspace: this.workspace,
       head: await this.w.workspaces.headSha(),
       filesTracked: await this.w.workspaces.fileCount(),
+      published,
       plan,
       tasks: this.w.tasks.all(),
       usage: this.w.budget.spent ?? { ...ZERO_USAGE },
@@ -644,6 +655,96 @@ export class Orchestrator {
     await this.w.tasks.update(taskId, { status: "abandoned", feedback: reason }, actor);
   }
 
+  /**
+   * Push the integration branch and open a pull request.
+   *
+   * Deterministic code rather than an agent, for the same reason the conductor
+   * is: there is no judgement in "commit this tree and open a PR for it". The
+   * first live attempt at this went through an agent, which had to discover the
+   * mechanics itself and then failed on an environment restriction it had no
+   * way to route around - having spent a model call to get there.
+   */
+  private async publish(): Promise<{
+    ok: boolean;
+    detail: string;
+    result?: RunReport["published"];
+  }> {
+    await this.w.ledger.record("run.phase", "orchestrator", { phase: "publish" });
+
+    const github = this.w.integrations.github;
+    if (!github.available()) {
+      return { ok: true, detail: `skipped (${github.unavailableReason()})` };
+    }
+    if (!this.config.grants.has("github:write")) {
+      return { ok: true, detail: "skipped (github:write is not granted to this run)" };
+    }
+
+    const repo = github.defaultRepo();
+    if (!repo) return { ok: false, detail: "GITHUB_REPO is not a valid owner/repo" };
+
+    const files = await this.w.workspaces.filesAtHead();
+    // .gitignore is scaffolding this run created, not part of the project.
+    const payload = files.filter((file) => file.path !== ".gitignore");
+    if (payload.length === 0) {
+      return { ok: false, detail: "nothing to publish: the integration branch is empty" };
+    }
+
+    const branch = `hive/${this.runId}`;
+    try {
+      const pushed = await github.pushTree(
+        repo,
+        branch,
+        payload,
+        `hive: ${this.options.spec.split("\n")[0]?.replace(/^#\s*/, "") ?? this.runId}`,
+      );
+
+      const summary = await this.w.board.get("plan.summary");
+      const pr = await github.openPullRequest(
+        repo,
+        branch,
+        (await github.getRepo(repo)).default_branch,
+        `hive: ${branch}`,
+        this.pullRequestBody(String(summary?.value ?? "")),
+      );
+
+      const result = { branch, commit: pushed.commit, pullRequest: pr.html_url };
+      await this.w.board.put("ship.published", result, "orchestrator");
+      await this.w.ledger.record("integration.call", "orchestrator", {
+        service: "github",
+        operation: "publish",
+        branch,
+        files: payload.length,
+        pullRequest: pr.number,
+      });
+      log.info(`published ${payload.length} file(s) to ${branch}; PR ${pr.html_url}`);
+      return {
+        ok: true,
+        detail: `${payload.length} file(s) on ${branch}; ${pr.html_url}`,
+        result,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.w.ledger.record("error", "orchestrator", { stage: "publish", error: message });
+      return { ok: false, detail: `could not publish: ${message}` };
+    }
+  }
+
+  private pullRequestBody(summary: string): string {
+    const tasks = this.w.tasks
+      .all()
+      .map((task) => `- \`${task.id}\` **${task.title}** - ${task.status}`)
+      .join("\n");
+    return [
+      summary || "Built autonomously by hive.",
+      "",
+      "## Tasks",
+      tasks,
+      "",
+      `Each task was built in its own worktree and reviewed before merging.`,
+      `Run \`${this.runId}\` - ${this.w.budget.summary()}`,
+    ].join("\n");
+  }
+
   /** Run one agent for a whole phase (integration, ship) and report the outcome. */
   private async runSingle(role: Role, instruction: string): Promise<{ ok: boolean; detail: string }> {
     await this.w.ledger.record("run.phase", "orchestrator", { phase: role });
@@ -689,17 +790,23 @@ export class Orchestrator {
     );
   }
 
-  private shipBrief(): string {
+  private shipBrief(published?: RunReport["published"]): string {
     const status = Object.entries(integrationStatus(this.w.integrations))
       .map(([name, state]) => `- ${name}: ${state}`)
       .join("\n");
     return (
-      `The project builds and its tests pass. Ship it.\n\n` +
+      `The project builds and its tests pass.\n\n` +
+      (published
+        ? `The code is already published: branch ${published.branch}, commit ` +
+          `${published.commit.slice(0, 8)}, pull request ${published.pullRequest}. ` +
+          `Do not push it again.\n\n`
+        : `The code has not been published to source control in this run.\n\n`) +
       `Integrations for this run:\n${status}\n\n` +
-      `Skip any step whose service is unavailable and record the gap on the blackboard. ` +
-      `Push the code to a branch named hive/${this.runId}, open a pull request describing what was built, ` +
-      `provision what the app needs, deploy if you have been granted deploy capability, verify it responds, ` +
-      `then send one summary email. Finish with complete_task.`
+      `Your job is what remains: provision the database the app needs, set the environment ` +
+      `variables, deploy if you have been granted deploy capability, verify the deployment ` +
+      `actually responds, and send one summary email. Skip any step whose service is ` +
+      `unavailable and record the gap on the blackboard rather than simulating it. ` +
+      `Finish with complete_task.`
     );
   }
 

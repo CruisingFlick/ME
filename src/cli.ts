@@ -195,6 +195,15 @@ function renderReport(report: RunReport): string {
       (t) => `  ${t.status.padEnd(18)} ${t.id.padEnd(10)} ${t.title}`,
     ),
   ];
+  if (report.published) {
+    lines.push(
+      "",
+      "published",
+      `  branch  ${report.published.branch}`,
+      `  commit  ${report.published.commit.slice(0, 12)}`,
+      `  pr      ${report.published.pullRequest ?? "(none)"}`,
+    );
+  }
   if (report.notes.length > 0) {
     lines.push("", "notes", ...report.notes.map((n) => `  - ${n}`));
   }
