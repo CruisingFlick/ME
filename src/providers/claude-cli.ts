@@ -297,20 +297,21 @@ function run(
   cwd?: string,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    // Node refuses to spawn a .cmd directly, and `shell: true` would concatenate
-    // the arguments unescaped. Invoking the interpreter explicitly keeps the
-    // arguments as an array, so Node quotes each one and nothing is concatenated.
+    // Node refuses to spawn a .cmd directly, so Windows needs a shell. This does
+    // mean Node concatenates the arguments rather than escaping them (DEP0190),
+    // which is tolerable only because every argument here is a constant or a
+    // bare identifier - the prompt goes over stdin and never reaches argv.
+    //
+    // Invoking cmd.exe explicitly with an argument array would be cleaner and
+    // silences the warning, but it killed the process outright on Windows and
+    // cannot be reproduced on Linux CI. Correct-with-a-warning beats elegant
+    // and broken; revisit only with a real Windows machine to test on.
     const executable = which(binary) ?? binary;
-    const viaCmd = process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
-    const child = viaCmd
-      ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", executable, ...args], {
-          stdio: ["pipe", "pipe", "pipe"],
-          ...(cwd ? { cwd } : {}),
-        })
-      : spawn(executable, args, {
-          stdio: ["pipe", "pipe", "pipe"],
-          ...(cwd ? { cwd } : {}),
-        });
+    const child = spawn(executable, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: process.platform === "win32",
+      ...(cwd ? { cwd } : {}),
+    });
     let stdout = "";
     let stderr = "";
     let killed = false;
