@@ -19,6 +19,35 @@ To stop everything, from any shell: `npm run hive -- halt`.
 
 ---
 
+## What it has actually built
+
+`examples/url-shortener.md` is a prose specification. Run unattended against it,
+the swarm planned four tasks, built them in parallel worktrees, reviewed and
+merged each one, and integrated the result:
+
+```
+status    succeeded
+head      3146decf6fd7 - 13 file(s) tracked
+spend     $2.6390 of $14.00 | 506s
+  ok   plan       4 tasks
+  ok   execute    4 done, 0 not completed
+  ok   integrate  npm test: 17/17 passing
+```
+
+Verified independently afterwards — not taken from the integrator's report. The
+project builds with `tsc`, passes 17 tests, and the running service satisfies
+every requirement in the spec:
+
+| Request | Response |
+|---|---|
+| `GET /health` | `{"ok":true}` 200 |
+| `POST /links {"url":"https://example.com/..."}` | `{"slug":"JADiwX","short_url":"..."}` |
+| `GET /JADiwX` | 302, `Location: https://example.com/...` |
+| `GET /nosuchslug` | `{"error":"slug not found"}` 404 |
+| `POST /links {"url":"not-a-url"}` | `{"error":"url must be an absolute http or https URL"}` 400 |
+
+No human touched it between the specification and that table.
+
 ## What it actually does
 
 A run moves through five phases. The sequencing is ordinary code; the work inside
