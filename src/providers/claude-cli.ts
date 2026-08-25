@@ -119,6 +119,14 @@ export class ClaudeCliProvider implements ModelProvider {
     }
 
     const text = payload.result ?? "";
+
+    // A quota notice arrives as ordinary result text with a zero exit code, so
+    // without this it looks like a successful answer: the orchestrator would
+    // try to parse a rate-limit message as a plan, blame the model for bad
+    // JSON, and retry against a quota that will not recover for hours.
+    const limit = quotaMessage(text, payload);
+    if (limit) throw new ProviderError(limit, this.id, false);
+
     const usage = payload.usage ?? {};
     const toolCalls = extractSignal(text, signalTools);
 
@@ -136,6 +144,32 @@ export class ClaudeCliProvider implements ModelProvider {
       },
     };
   }
+}
+
+/**
+ * Recognise the CLI reporting that there is no quota left.
+ *
+ * Deliberately narrow: it must match a real limit notice and nothing an agent
+ * might legitimately write about rate limiting while, say, building a rate
+ * limiter.
+ */
+function quotaMessage(text: string, payload: CliResult): string | null {
+  const trimmed = text.trim();
+  const looksLikeLimit =
+    /^(you'?ve|you have)\s+(hit|reached|exceeded)\s+your\s+(session|usage|weekly|rate)\s+limit/i.test(
+      trimmed,
+    ) ||
+    /^claude usage limit reached/i.test(trimmed) ||
+    /^rate[_ ]limit(_error)?\b/i.test(trimmed);
+
+  // A short standalone notice, not a passing mention inside real work.
+  if (looksLikeLimit && trimmed.length < 400) {
+    return `claude CLI quota exhausted: ${trimmed}`;
+  }
+  if (payload.is_error && trimmed.length > 0 && trimmed.length < 400) {
+    return `claude CLI reported an error: ${trimmed}`;
+  }
+  return null;
 }
 
 interface CliResult {
