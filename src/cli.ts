@@ -296,7 +296,14 @@ async function verify(): Promise<number> {
   for (const kind of ["model", "service"] as const) {
     process.stdout.write(`${kind}s\n`);
     for (const result of results.filter((r) => r.kind === kind)) {
-      const mark = result.status === "ok" ? "ok  " : result.status === "failed" ? "FAIL" : "--  ";
+      const mark =
+        result.status === "ok"
+          ? "ok  "
+          : result.status === "failed"
+            ? "FAIL"
+            : result.status === "unreachable"
+              ? "NET "
+              : "--  ";
       const timing = result.ms > 0 ? ` (${result.ms}ms)` : "";
       process.stdout.write(`  ${mark} ${result.name.padEnd(width)}  ${result.detail}${timing}\n`);
     }
@@ -304,6 +311,17 @@ async function verify(): Promise<number> {
   }
 
   const failed = results.filter((r) => r.status === "failed");
+  const unreachable = results.filter((r) => r.status === "unreachable");
+
+  if (unreachable.length > 0) {
+    process.stdout.write(
+      `${unreachable.length} service(s) could not be reached from this machine: ` +
+        `${unreachable.map((r) => r.name).join(", ")}\n` +
+        `The credential was never sent, so this says nothing about whether it is valid - ` +
+        `it is a network egress policy blocking the host. Allow the host, or run from a ` +
+        `machine without the restriction.\n\n`,
+    );
+  }
   const workingModels = results.filter((r) => r.kind === "model" && r.status === "ok");
 
   if (failed.length > 0) {
