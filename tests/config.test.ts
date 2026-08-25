@@ -48,6 +48,16 @@ describe("configuration precedence", () => {
     expect(result.source).toBe(".env");
   });
 
+  it("reads a .env written with a byte-order mark", () => {
+    // Notepad is the default editor on Windows and writes UTF-8 with a BOM,
+    // which turns the first key into "\uFEFFGITHUB_TOKEN": present in the file,
+    // spelled correctly, and silently unreadable.
+    const result = loadIn({}, "\uFEFFGITHUB_TOKEN=token-after-a-bom\nGITHUB_REPO=owner/repo\n");
+
+    expect(result.token).toBe("token-after-a-bom");
+    expect(result.source).toBe(".env");
+  });
+
   it("uses the environment when .env does not set the key", () => {
     // Deployments inject real environment variables and ship no .env.
     const result = loadIn({ GITHUB_TOKEN: "from-the-environment" }, "GITHUB_REPO=owner/repo\n");

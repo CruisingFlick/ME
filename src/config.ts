@@ -1,4 +1,6 @@
-import { config as loadDotenv } from "dotenv";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { parse as parseDotenv } from "dotenv";
 import { z } from "zod";
 import type { Capability } from "./types.js";
 
@@ -18,8 +20,31 @@ const fromDotenv = new Set<string>();
  * and deployments inject real environment variables without shipping a .env,
  * so nothing is overridden there.
  */
-const parsed = loadDotenv({ quiet: true, override: true });
-for (const key of Object.keys(parsed.parsed ?? {})) fromDotenv.add(key);
+loadEnvFile(resolve(process.cwd(), ".env"));
+
+/**
+ * Read .env ourselves rather than letting dotenv do it, for two reasons.
+ *
+ * The first is precedence, described above. The second is the byte-order mark:
+ * Notepad, the default editor on Windows, writes UTF-8 with a BOM, which turns
+ * the first key into "\uFEFFGITHUB_TOKEN" and makes it silently unreadable. The
+ * variable is right there in the file, spelled correctly, and reports itself
+ * unset - with nothing to see and nothing to search for.
+ */
+function loadEnvFile(path: string): void {
+  if (!existsSync(path)) return;
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return; // an unreadable .env is not worth failing startup over
+  }
+  const values = parseDotenv(raw.replace(/^\uFEFF/, ""));
+  for (const [key, value] of Object.entries(values)) {
+    process.env[key] = value;
+    fromDotenv.add(key);
+  }
+}
 
 /** Where a configuration value was read from, for diagnostics. */
 export function sourceOf(key: string): ".env" | "environment" | "default" {
