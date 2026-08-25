@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { getConfig, sourceOf } from "./config.js";
+import { getConfig, sourceOf, type HiveConfig } from "./config.js";
 import { KillSwitch } from "./kernel/killswitch.js";
 import { buildIntegrations, integrationStatus } from "./integrations/index.js";
 import { Orchestrator, type RunReport } from "./orchestrator/orchestrator.js";
@@ -29,6 +29,9 @@ Options for build:
   --workspace <dir>              Where the project is built (default: .hive/workspace)
   --parallel <n>                 Builders running at once (default: HIVE_MAX_PARALLEL)
   --dry-run                      Build and review, but contact no external service
+  --max-usd <n>                  Override the run's spend cap for this run only
+  --wall-clock <minutes>         Override the run's time cap for this run only
+  --review-rounds <n>            Override how many times a task may be sent back
   --resume <run-id>              Continue an interrupted run instead of starting one
   --verbose                      Debug logging
 
@@ -78,6 +81,9 @@ interface Flags {
   "review-model"?: string;
   workspace?: string;
   parallel?: string;
+  "max-usd"?: string;
+  "wall-clock"?: string;
+  "review-rounds"?: string;
   "dry-run"?: boolean;
   resume?: string;
   verbose?: boolean;
@@ -129,6 +135,7 @@ async function build(flags: Flags): Promise<number> {
     workspace: flags.workspace,
     parallelism: flags.parallel ? Number(flags.parallel) : undefined,
     dryRun: Boolean(flags["dry-run"]),
+    config: withOverrides(getConfig(), flags),
   });
 
   try {
@@ -175,6 +182,36 @@ async function planOnly(flags: Flags): Promise<number> {
   } finally {
     await orchestrator.close();
   }
+}
+
+/**
+ * Apply per-run overrides from the command line.
+ *
+ * .env deliberately wins over the environment, which closed a real bug but left
+ * no way to change one setting for one run without editing the file. A flag is
+ * the right channel for that: explicit, scoped to the invocation, and gone
+ * afterwards.
+ */
+function withOverrides(config: HiveConfig, flags: Flags): HiveConfig {
+  const number = (raw: string | undefined, label: string): number | undefined => {
+    if (raw === undefined) return undefined;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error(`--${label} must be a positive number, got "${raw}"`);
+    }
+    return value;
+  };
+
+  const maxUsd = number(flags["max-usd"], "max-usd");
+  const wallClock = number(flags["wall-clock"], "wall-clock");
+  const rounds = number(flags["review-rounds"], "review-rounds");
+
+  return {
+    ...config,
+    ...(maxUsd !== undefined ? { HIVE_MAX_USD: maxUsd } : {}),
+    ...(wallClock !== undefined ? { HIVE_WALL_CLOCK_MINUTES: wallClock } : {}),
+    ...(rounds !== undefined ? { HIVE_MAX_REVIEW_ROUNDS: Math.floor(rounds) } : {}),
+  };
 }
 
 function renderReport(report: RunReport): string {
