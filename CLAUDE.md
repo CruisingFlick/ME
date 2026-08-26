@@ -7,7 +7,7 @@ working *on* it.
 ## Commands
 
 ```bash
-npm test                 # 89 tests, ~15s, no network
+npm test                 # 134 tests, ~15s, no network
 npm run typecheck
 npm run demo             # full pipeline against the mock provider, no key needed
 npm run hive -- doctor   # what is configured
@@ -51,8 +51,13 @@ These each exist because the alternative failed in a real run:
   committed this round", which is normal on any retry.
 - **A halt or exhausted budget leaves its in-flight tasks recoverable.** Those
   are facts about the run, not judgements on the task.
-- **Failed merges are always aborted.** A repo stuck mid-merge poisons every
-  later task.
+- **Failed merges are always aborted, and report git's own reason.** A repo
+  stuck mid-merge poisons every later task. And a merge refused *before* it
+  starts - because loose files in the integration checkout block the checkout -
+  leaves no unmerged paths at all, so inferring "conflict in 0 files" named the
+  wrong cause and sent four tasks to be rebuilt against a conflict that did not
+  exist. Loose work in the integration tree is committed, not deleted, before a
+  merge: an agent wrote it.
 - **A review round is spent only when a reviewer actually judged the work.** A
   reviewer that ran out of turns, or a merge overtaken by another, says nothing
   about whether the task is converging. Those retries have a ceiling of their

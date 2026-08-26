@@ -250,3 +250,78 @@ describe("concurrent access to the shared repository", () => {
     expect((await ws.mergeTask("after-failure")).merged).toBe(true);
   });
 });
+
+describe("leftovers in the integration checkout", () => {
+  // The failure this whole block exists for: an agent working in the
+  // integration checkout wrote copies of two files and did not commit them.
+  // Git then refused the *checkout* of the next merge rather than attempting
+  // it - which reports no unmerged paths at all. That was read as "merge
+  // conflict in 0 files", and four tasks were sent to be rebuilt against a
+  // conflict that did not exist. `git merge task/t4` applied cleanly the
+  // moment the leftovers were gone.
+  it("merges a branch that untracked copies of its own files would have blocked", async () => {
+    const dir = await ws.forTask("t1");
+    write(dir, "server.ts", "export const app = 1;\n");
+    await ws.commitTask("t1", "add the server");
+
+    // The integrator's leftover: the same file, uncommitted, in the tree the
+    // merge has to check out into.
+    write(ws.integration, "server.ts", "export const app = 1;\n");
+
+    const merge = await ws.mergeTask("t1");
+    expect(merge.merged).toBe(true);
+    expect(merge.conflicts).toEqual([]);
+    expect(readFileSync(join(ws.integration, "server.ts"), "utf8")).toBe("export const app = 1;\n");
+  });
+
+  it("keeps loose work rather than discarding it to clear the way", async () => {
+    const dir = await ws.forTask("t1");
+    write(dir, "a.txt", "task work");
+    await ws.commitTask("t1", "add a.txt");
+
+    // Unrelated to the merge, and nobody's to throw away: an agent wrote it.
+    write(ws.integration, "notes.md", "integrator scratch\n");
+
+    expect((await ws.mergeTask("t1")).merged).toBe(true);
+    expect(readFileSync(join(ws.integration, "notes.md"), "utf8")).toBe("integrator scratch\n");
+    // Committed, not merely left on disk - so the next merge is not blocked by
+    // it either, and a later task branching from head can see it.
+    const next = await ws.forTask("t2");
+    expect(readFileSync(join(next, "notes.md"), "utf8")).toBe("integrator scratch\n");
+  });
+
+  it("still reports a real disagreement over the same file as a conflict", async () => {
+    const dir = await ws.forTask("t1");
+    write(dir, "server.ts", "export const app = 1;\n");
+    await ws.commitTask("t1", "add the server");
+
+    // Settling the tree must not paper over a genuine collision: this leftover
+    // says something different from the branch, so the integrator has to decide.
+    write(ws.integration, "server.ts", "export const app = 2;\n");
+
+    const merge = await ws.mergeTask("t1");
+    expect(merge.merged).toBe(false);
+    expect(merge.conflicts).toContain("server.ts");
+    expect(merge.detail).toContain("server.ts");
+  });
+
+  it("names git's own reason when a merge is refused before it starts", async () => {
+    const dir = await ws.forTask("t1");
+    write(dir, "a.txt", "task work");
+    await ws.commitTask("t1", "add a.txt");
+
+    // A previous process died mid-merge. Nothing is loose, so there is nothing
+    // to settle, and git refuses outright - with no unmerged paths to point at.
+    const head = await ws.headSha();
+    writeFileSync(join(ws.integration, ".git", "MERGE_HEAD"), `${head}\n`);
+
+    const merge = await ws.mergeTask("t1");
+    expect(merge.merged).toBe(false);
+    expect(merge.conflicts).toEqual([]);
+    // The old message here was "merge conflict in 0 files", which named the
+    // wrong cause and cost four tasks.
+    expect(merge.detail).not.toContain("conflict in 0");
+    expect(merge.detail).toContain("merge refused");
+    expect(merge.detail).toMatch(/MERGE_HEAD/);
+  });
+});

@@ -175,6 +175,8 @@ export class Workspaces {
       return { merged: false, conflicts: [], detail: `no branch for ${taskId}` };
     }
 
+    await this.settleIntegrationTree();
+
     const result = await this.git(this.integration, [
       "merge",
       "--no-ff",
@@ -191,11 +193,48 @@ export class Workspaces {
     // Leaving the integration branch mid-merge would poison every later task,
     // so back it out and report instead.
     await this.git(this.integration, ["merge", "--abort"]);
+
+    // git's own reason, not our inference from it. A merge refused before it
+    // starts - because the checkout is blocked - leaves no unmerged paths at
+    // all, so reporting "conflict in 0 files" named the wrong cause entirely
+    // and sent four tasks to be rebuilt against a conflict that did not exist.
+    const reason = (result.stderr || result.stdout).trim().split("\n")[0] ?? "unknown";
     return {
       merged: false,
       conflicts,
-      detail: `merge conflict in ${conflicts.length} file(s): ${conflicts.join(", ")}`,
+      detail:
+        conflicts.length > 0
+          ? `merge conflict in ${conflicts.length} file(s): ${conflicts.join(", ")}`
+          : `merge refused: ${reason}`,
     };
+  }
+
+  /**
+   * Commit anything an agent left loose in the integration checkout.
+   *
+   * The integrator and operator work in this tree, and files they write but do
+   * not commit will block the checkout of a later merge - git refuses rather
+   * than overwrite them. That surfaced as a phantom conflict on a branch that
+   * merged cleanly the moment the leftovers were removed.
+   *
+   * Committing rather than discarding, because those files may be an agent's
+   * real work; the alternative is silently deleting it.
+   */
+  private async settleIntegrationTree(): Promise<void> {
+    const status = await this.git(this.integration, ["status", "--porcelain"]);
+    const loose = status.stdout.split("\n").filter(Boolean);
+    if (loose.length === 0) return;
+
+    await this.git(this.integration, ["add", "-A"]);
+    await this.git(this.integration, [
+      "commit",
+      "-m",
+      `hive: commit ${loose.length} uncommitted change(s) left in the integration checkout`,
+    ]);
+    log.warn(
+      `committed ${loose.length} loose file(s) before merging; ` +
+        `an agent wrote them into the integration checkout without committing`,
+    );
   }
 
   /** Drop an abandoned task's checkout without touching the integration branch. */
