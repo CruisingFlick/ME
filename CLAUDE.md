@@ -53,6 +53,10 @@ These each exist because the alternative failed in a real run:
   are facts about the run, not judgements on the task.
 - **Failed merges are always aborted.** A repo stuck mid-merge poisons every
   later task.
+- **A review round is spent only when a reviewer actually judged the work.** A
+  reviewer that ran out of turns, or a merge overtaken by another, says nothing
+  about whether the task is converging. Those retries have a ceiling of their
+  own instead.
 - **Rejection funnels through `rejectTask`** whatever the cause, so the round
   budget is spent identically and nothing can loop for free.
 - **Sensitive blackboard keys are withheld from the rendered board**, which goes

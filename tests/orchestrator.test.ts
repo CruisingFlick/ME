@@ -401,6 +401,47 @@ describe("Orchestrator", () => {
     expect(sawWarning).toBe(true);
   });
 
+  it("does not spend a review round when the reviewer never judged", async () => {
+    // A reviewer that runs out of turns says nothing about whether the work is
+    // converging. Charging it to the task's budget abandons work that was never
+    // given a fair hearing - which is exactly what happened on a real build.
+    let reviews = 0;
+    const { report } = await runWith(
+      {
+        reviewer: () => {
+          reviews++;
+          // Never renders a verdict, however many times it is asked.
+          return reply("still investigating, ran out of room");
+        },
+      },
+      { HIVE_MAX_REVIEW_ROUNDS: "3" },
+    );
+
+    const task = report.tasks[0];
+    expect(task?.status).toBe("abandoned");
+    // Stopped by the attempt ceiling, not by the review budget.
+    expect(task?.reviewRounds).toBe(0);
+    expect(task?.feedback).toContain("failures outside the task");
+    expect(reviews).toBeGreaterThan(3);
+  });
+
+  it("spends a review round when the reviewer actually judged", async () => {
+    const { report } = await runWith(
+      {
+        reviewer: () =>
+          reply("changes", [
+            call("submit_review", { verdict: "request_changes", summary: "still wrong" }),
+          ]),
+      },
+      { HIVE_MAX_REVIEW_ROUNDS: "2" },
+    );
+
+    const task = report.tasks[0];
+    expect(task?.status).toBe("abandoned");
+    expect(task?.reviewRounds).toBe(2);
+    expect(task?.feedback).toContain("did not converge");
+  });
+
   it("records the run in an append-only ledger", async () => {
     const { report } = await runWith({});
     const { readFileSync } = await import("node:fs");
@@ -414,5 +455,55 @@ describe("Orchestrator", () => {
     expect(types).toContain("model.call");
     expect(types).toContain("task.status");
     expect(types).toContain("run.finished");
+  });
+});
+
+describe("choosing a model per role", () => {
+  it("keeps judgement roles on the strongest model and moves the rest", async () => {
+    // Where the tokens actually go: a builder loop runs many more turns than an
+    // architect, against a brief that has already been decided.
+    const seen: Array<{ role: string; model: string }> = [];
+    const provider = new MockProvider((request) => {
+      const role = /ROLE: (\w+)/.exec(request.system)?.[1] ?? "?";
+      seen.push({ role, model: "recorded-below" });
+      if (role === "architect") return reply(JSON.stringify(WIDE_PLAN));
+      if (role === "builder") return defaultBuilder(request);
+      if (role === "reviewer") {
+        return request.messages.some((t) =>
+          t.content.some((p) => p.type === "tool_call" && p.name === "submit_review"),
+        )
+          ? reply("done")
+          : reply("ok", [call("submit_review", { verdict: "approve", summary: "fine" })]);
+      }
+      return request.messages.some((t) =>
+        t.content.some((p) => p.type === "tool_call" && p.name === "complete_task"),
+      )
+        ? reply("done")
+        : reply("green", [call("complete_task", { summary: "integrated" })]);
+    });
+
+    const store = new MemoryStore();
+    await store.init();
+    const orchestrator = await Orchestrator.create({
+      spec: "build four files",
+      provider: "anthropic",
+      reviewProvider: "anthropic",
+      config: config({ HIVE_WORKER_MODEL: "claude-sonnet-5" }),
+      providers: new ProviderRegistry(new Map([["anthropic", provider]])),
+      store,
+      integrations: buildIntegrations(),
+      dryRun: true,
+      parallelism: 1,
+    });
+    const report = await orchestrator.run();
+    await orchestrator.close();
+
+    expect(report.status).toBe("succeeded");
+    expect(report.notes.join(" ")).toContain("for building");
+  });
+
+  it("leaves everything on one model when no worker model is configured", async () => {
+    const { report } = await runWith({});
+    expect(report.notes.join(" ")).not.toContain("for building");
   });
 });

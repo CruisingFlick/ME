@@ -101,6 +101,19 @@ You take a working project and put it into the world: source control, database, 
 - End with complete_task, or block_task if the project could not be shipped.`,
 };
 
+/**
+ * Which roles need the strongest model.
+ *
+ * The architect's plan determines every task downstream, and the reviewer is
+ * the only thing standing between a defect and the merge - both are worth the
+ * strongest model available. Builders, integrators and operators work against a
+ * brief that has already been decided, and a measured build spent roughly five
+ * cents a turn on that.
+ */
+export function needsStrongestModel(role: Role): boolean {
+  return role === "architect" || role === "reviewer";
+}
+
 export function systemPrompt(role: Role): string {
   return `${COMMON}\n\n${ROLE_PROMPTS[role]}`;
 }

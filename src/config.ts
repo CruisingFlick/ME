@@ -60,6 +60,12 @@ export function sourceOf(key: string): ".env" | "environment" | "default" {
 const Schema = z.object({
   // --- model providers -----------------------------------------------------
   ANTHROPIC_API_KEY: z.string().optional(),
+  /**
+   * Model for the roles that execute against a precise brief. Judgement roles -
+   * architect and reviewer - keep the provider's strongest model, because a bad
+   * plan or a missed defect costs far more than the tokens saved on it.
+   */
+  HIVE_WORKER_MODEL: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
 

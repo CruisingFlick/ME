@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { Agent, type AgentOutcome } from "../agents/agent.js";
+import { needsStrongestModel } from "../agents/roles.js";
 import { getConfig, type HiveConfig } from "../config.js";
 import { Blackboard } from "../kernel/blackboard.js";
 import { Budget } from "../kernel/budget.js";
@@ -212,6 +213,13 @@ export class Orchestrator {
       } else {
         notes.push(
           `single-vendor run: ${this.builderProvider} both builds and reviews - configure a second provider for independent review`,
+        );
+      }
+
+      const worker = this.modelFor("builder", this.builderProvider, this.builderModel);
+      if (worker !== this.builderModel) {
+        notes.push(
+          `models: ${this.builderModel} for planning and review, ${worker} for building`,
         );
       }
 
@@ -583,7 +591,9 @@ export class Orchestrator {
     const verdict = await this.review(this.w.tasks.get(task.id), summary, worktree, diff);
 
     if (!verdict.approved) {
-      return this.rejectTask(task.id, this.w.tasks.get(task.id), verdict.summary);
+      return this.rejectTask(task.id, this.w.tasks.get(task.id), verdict.summary, {
+        judged: verdict.judged,
+      });
     }
 
     if (!commit.committed) {
@@ -607,6 +617,9 @@ export class Orchestrator {
         `merge conflict: your work was approved but no longer applies to the integration branch. ` +
           `Conflicting files: ${merge.conflicts.join(", ") || "unknown"}. ` +
           `You have a fresh checkout of the current code; redo the change on top of it.`,
+        // The reviewer approved this work. Being overtaken by another merge is
+        // not a failure to converge, and must not be charged as one.
+        { judged: false },
       );
     }
 
@@ -621,24 +634,47 @@ export class Orchestrator {
    * amount, so the round count is the same whether the rejection came from the
    * reviewer, from an empty commit, or from a failed merge.
    */
-  private async rejectTask(taskId: string, task: Task, feedback: string): Promise<void> {
-    const rounds = task.reviewRounds + 1;
-    if (rounds >= this.config.HIVE_MAX_REVIEW_ROUNDS) {
+  private async rejectTask(
+    taskId: string,
+    task: Task,
+    feedback: string,
+    options: { judged?: boolean } = {},
+  ): Promise<void> {
+    // A round is spent only when a reviewer actually judged the work. A
+    // reviewer that ran out of turns, a merge that no longer applies, or a
+    // provider that could not authenticate say nothing about whether the task
+    // is converging, and charging them to its budget abandons work that was
+    // never given a fair hearing.
+    const judged = options.judged ?? true;
+    const rounds = task.reviewRounds + (judged ? 1 : 0);
+    const attempts = task.attempts + 1;
+
+    // Unjudged retries still need a ceiling of their own, or a task whose
+    // reviewer keeps failing would be dispatched forever.
+    const roundsSpent = rounds >= this.config.HIVE_MAX_REVIEW_ROUNDS;
+    const attemptsSpent = attempts >= this.config.HIVE_MAX_REVIEW_ROUNDS * 2 + 2;
+
+    if (roundsSpent || attemptsSpent) {
+      const why = roundsSpent
+        ? `did not converge after ${rounds} review round(s)`
+        : `gave up after ${attempts} attempts, most of them lost to failures outside the task`;
       await this.w.tasks.update(
         taskId,
         {
           status: "abandoned",
           reviewRounds: rounds,
-          feedback: `did not converge after ${rounds} rounds. Last feedback:\n${feedback}`,
+          attempts,
+          feedback: `${why}. Last feedback:\n${feedback}`,
         },
         "reviewer-1",
       );
       await this.w.workspaces.discardTask(taskId);
       return;
     }
+
     await this.w.tasks.update(
       taskId,
-      { status: "changes_requested", reviewRounds: rounds, feedback },
+      { status: "changes_requested", reviewRounds: rounds, attempts, feedback },
       "reviewer-1",
     );
   }
@@ -648,7 +684,7 @@ export class Orchestrator {
     builderSummary: string,
     worktree: string,
     diff: string,
-  ): Promise<{ approved: boolean; summary: string }> {
+  ): Promise<{ approved: boolean; summary: string; judged: boolean }> {
     const reviewer = this.agent(
       "reviewer-1",
       "reviewer",
@@ -679,6 +715,7 @@ export class Orchestrator {
       return {
         approved: payload.verdict === "approve",
         summary: String(payload.summary ?? ""),
+        judged: true,
       };
     }
 
@@ -686,6 +723,8 @@ export class Orchestrator {
     // through: treat the absence of an approval as a request for changes.
     return {
       approved: false,
+      // Nothing was judged: this is the reviewer failing, not the work.
+      judged: false,
       summary:
         `The reviewer did not return a verdict (${outcome.kind}). Treat the work as unreviewed ` +
         `and re-check it against the brief yourself.\n${outcome.text.slice(0, 2000)}`,
@@ -898,7 +937,7 @@ export class Orchestrator {
       id: agentId,
       role,
       provider: providerId,
-      model,
+      model: this.modelFor(role, providerId, model),
       // An agent may hold only what its role's tools actually need, intersected
       // with what the run was granted.
       capabilities: this.w.tools
@@ -921,6 +960,22 @@ export class Orchestrator {
       integrations: this.w.integrations,
     };
     return new Agent(spec, provider, this.w.tools, context);
+  }
+
+  /**
+   * The model a role runs on.
+   *
+   * An explicit --model wins. Otherwise judgement roles get the provider's
+   * strongest model and the rest get HIVE_WORKER_MODEL when it is set, which is
+   * where the tokens actually go: a builder loop runs many more turns than an
+   * architect, against a brief that has already been decided.
+   */
+  private modelFor(role: Role, providerId: string, requested: string): string {
+    if (this.options.model) return requested;
+    if (needsStrongestModel(role)) return requested;
+    const worker = this.config.HIVE_WORKER_MODEL;
+    // Only meaningful for the API providers; a CLI provider names its own model.
+    return worker && providerId === "anthropic" ? worker : requested;
   }
 
   private get builderProvider(): string {

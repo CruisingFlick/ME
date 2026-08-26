@@ -50,8 +50,19 @@ export interface Task {
   status: TaskStatus;
   /** Agent currently holding the task, if any. */
   assignee?: string;
-  /** How many review rounds this task has been through. */
+  /**
+   * Review rounds this task has been through - times a reviewer judged the work
+   * and asked for changes. Bounded by HIVE_MAX_REVIEW_ROUNDS.
+   */
   reviewRounds: number;
+  /**
+   * Times this task has been dispatched at all, including rounds lost to
+   * failures that were nothing to do with the work: a reviewer that ran out of
+   * turns, a merge that no longer applied, a provider that could not
+   * authenticate. Those must not spend the convergence budget, but they still
+   * need a ceiling of their own or a task could be retried forever.
+   */
+  attempts: number;
   /** Latest reviewer feedback, fed back to the builder verbatim. */
   feedback?: string;
   createdAt: string;

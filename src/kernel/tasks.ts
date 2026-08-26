@@ -45,6 +45,7 @@ export class TaskGraph {
       role: spec.role ?? "builder",
       status: "pending",
       reviewRounds: 0,
+      attempts: 0,
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
