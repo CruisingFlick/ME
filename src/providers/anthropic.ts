@@ -60,6 +60,13 @@ export class AnthropicProvider implements ModelProvider {
       const stream = this.sdk.messages.stream({
         model,
         max_tokens: request.maxTokens ?? 32_000,
+        // Cache the last cacheable block as well as the system prompt. An agent
+        // turn loop resends the whole conversation every turn, and it grows: by
+        // turn twelve of a real build most of the request was being re-read at
+        // full price, because only the system prompt was marked cacheable and it
+        // is the smallest part. This caches the conversation prefix too, which
+        // is where the tokens actually are.
+        cache_control: { type: "ephemeral" },
         system: [
           { type: "text", text: request.system, cache_control: { type: "ephemeral" } },
         ],
