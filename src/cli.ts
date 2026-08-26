@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { getConfig, sourceOf, type HiveConfig } from "./config.js";
 import { KillSwitch } from "./kernel/killswitch.js";
+import { RunLockedError } from "./kernel/runlock.js";
 import { buildIntegrations, integrationStatus } from "./integrations/index.js";
 import { Orchestrator, type RunReport } from "./orchestrator/orchestrator.js";
 import { ProviderRegistry } from "./providers/registry.js";
@@ -152,6 +153,12 @@ async function build(flags: Flags): Promise<number> {
     const result = await orchestrator.run();
     process.stdout.write(renderReport(result));
     return result.status === "succeeded" ? 0 : 1;
+  } catch (err) {
+    if (err instanceof RunLockedError) {
+      process.stderr.write(`\n${err.message}\n\n`);
+      return 3;
+    }
+    throw err;
   } finally {
     await orchestrator.close();
   }

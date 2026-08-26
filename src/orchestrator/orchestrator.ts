@@ -8,6 +8,7 @@ import { MessageBus } from "../kernel/bus.js";
 import { KillSwitch } from "../kernel/killswitch.js";
 import { Ledger } from "../kernel/ledger.js";
 import { PolicyEngine } from "../kernel/policy.js";
+import { RunLock } from "../kernel/runlock.js";
 import { openStore, type Store } from "../kernel/store/index.js";
 import { Workspaces } from "../kernel/workspace.js";
 import { TaskGraph } from "../kernel/tasks.js";
@@ -77,6 +78,7 @@ interface Wiring {
   tools: ToolRegistry;
   providers: ProviderRegistry;
   workspaces: Workspaces;
+  lock: RunLock;
 }
 
 /**
@@ -120,6 +122,7 @@ export class Orchestrator {
       bus: new MessageBus(store, ledger, runId),
       board: new Blackboard(store, ledger, runId),
       workspaces,
+      lock: new RunLock(config.HIVE_STATE_DIR, runId),
       policy: new PolicyEngine({ runGrants: config.grants, workspace }),
       budget: new Budget({
         maxRunUsd: config.HIVE_MAX_USD,
@@ -176,6 +179,10 @@ export class Orchestrator {
     let plan: Plan | undefined;
     let published: RunReport["published"];
     let status: RunReport["status"] = "succeeded";
+
+    // Before anything else: no second process on this run. Two of them claim the
+    // same task and spawn builders into the same worktree.
+    this.w.lock.acquire();
 
     // A halt left over from a previous run would stop this one before it starts.
     // Resuming is itself an instruction to continue, so the halt clears either way.
@@ -285,6 +292,7 @@ export class Orchestrator {
    * on its own.
    */
   async planOnly(): Promise<Plan> {
+    this.w.lock.acquire();
     this.w.kill.reset();
     await this.w.ledger.record("run.started", "orchestrator", { mode: "plan-only" });
     const plan = await this.plan();
@@ -300,6 +308,7 @@ export class Orchestrator {
   }
 
   async close(): Promise<void> {
+    this.w.lock.release();
     if (!this.options.store) await this.store.close();
   }
 

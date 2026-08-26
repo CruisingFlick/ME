@@ -192,6 +192,14 @@ not the built project's database.
 rather than waited on. A reviewer that talks without rendering a verdict counts
 as *request changes*, never as approval.
 
+**One process per run.** A run takes a lock naming the process holding it, and
+a second one is refused rather than allowed to collide. Two processes on the
+same run is a quiet, destructive failure: both claim the same task, both spawn
+a builder into the same worktree, and the second commits nothing because the
+first already committed the work — so a task that actually succeeded is sent
+back for "no changes", at twice the cost. A lock whose process is gone is taken
+over, so an interrupted run stays resumable.
+
 **The kill switch.** `hive halt` writes `.hive/HALT`; every agent checks it before
 each model call and each tool call. It is a file rather than a signal precisely so
 you can stop a run from any shell, even one that has stopped responding.

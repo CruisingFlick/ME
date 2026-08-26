@@ -55,6 +55,9 @@ These each exist because the alternative failed in a real run:
   budget is spent identically and nothing can loop for free.
 - **Sensitive blackboard keys are withheld from the rendered board**, which goes
   into every agent's context on every turn.
+- **One process per run, enforced by a lock.** Two processes on one run claim
+  the same task and spawn builders into the same worktree; the second then
+  commits nothing and the task is rejected for "no changes".
 - **Capabilities are decided before the run.** Nothing grants itself anything
   mid-run; there is nobody to ask.
 
