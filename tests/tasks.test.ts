@@ -70,3 +70,49 @@ describe("TaskGraph", () => {
     expect(tasks.isComplete).toBe(true);
   });
 });
+
+describe("the size of the work graph", () => {
+  async function capped(maxTasks: number): Promise<TaskGraph> {
+    const store = new MemoryStore();
+    await store.init();
+    const ledger = new Ledger(store, "run_capped", STATE_DIR);
+    const tasks = new TaskGraph(store, ledger, "run_capped", maxTasks);
+    await tasks.load();
+    return tasks;
+  }
+
+  it("is unbounded when no ceiling is set", async () => {
+    const tasks = await graph();
+    expect(tasks.headroom()).toBe(Infinity);
+  });
+
+  it("reports the room left under its ceiling", async () => {
+    const tasks = await capped(3);
+    expect(tasks.headroom()).toBe(3);
+    await tasks.add({ id: "a", title: "A", brief: "" });
+    await tasks.add({ id: "b", title: "B", brief: "" });
+    expect(tasks.headroom()).toBe(1);
+  });
+
+  it("reports no room once the ceiling is reached", async () => {
+    const tasks = await capped(1);
+    await tasks.add({ id: "a", title: "A", brief: "" });
+    expect(tasks.headroom()).toBe(0);
+  });
+
+  it("still knows it is full after a resume", async () => {
+    // The ceiling has to survive a restart, or a resumed run starts growing
+    // its graph again from wherever it was stopped.
+    const store = new MemoryStore();
+    await store.init();
+    const ledger = new Ledger(store, "run_capped", STATE_DIR);
+    const first = new TaskGraph(store, ledger, "run_capped", 2);
+    await first.load();
+    await first.add({ id: "a", title: "A", brief: "" });
+    await first.add({ id: "b", title: "B", brief: "" });
+
+    const resumed = new TaskGraph(store, ledger, "run_capped", 2);
+    await resumed.load();
+    expect(resumed.headroom()).toBe(0);
+  });
+});

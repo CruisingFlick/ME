@@ -124,6 +124,15 @@ export const addTaskTool: HiveTool = {
     },
   },
   async run(input, context) {
+    // A refusal the agent can act on: it still has the finding, and the right
+    // move is now to say so rather than to grow a graph the run cannot finish.
+    if (context.tasks.headroom() === 0) {
+      return fail(
+        "the work graph is at its size limit for this run, so no further task " +
+          "can be added. Report what you found in your summary instead.",
+      );
+    }
+
     const dependsOn = strArray(input, "depends_on");
     const unknown = dependsOn.filter((dep) => !context.tasks.has(dep));
     if (unknown.length > 0) {

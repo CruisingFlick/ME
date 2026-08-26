@@ -115,7 +115,7 @@ export class Orchestrator {
 
     const store = options.store ?? (await openStore(runId));
     const ledger = new Ledger(store, runId, config.HIVE_STATE_DIR);
-    const tasks = new TaskGraph(store, ledger, runId);
+    const tasks = new TaskGraph(store, ledger, runId, config.HIVE_MAX_TASKS);
     await tasks.load();
 
     const w: Wiring = {
@@ -387,7 +387,7 @@ export class Orchestrator {
 
       try {
         const plan = parsePlan(raw);
-        const problems = validatePlan(plan);
+        const problems = validatePlan(plan, { maxTasks: this.config.HIVE_MAX_TASKS });
         if (problems.length > 0) {
           lastProblems = problems.map((p) => `- ${p.detail}`).join("\n");
           log.warn(`plan attempt ${attempt} rejected`, lastProblems);

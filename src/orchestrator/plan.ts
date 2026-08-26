@@ -21,7 +21,12 @@ export type Plan = z.infer<typeof PlanSchema>;
 export type PlannedTask = z.infer<typeof TaskSchema>;
 
 export interface PlanProblem {
-  kind: "unknown_dependency" | "self_dependency" | "duplicate_id" | "path_conflict";
+  kind:
+    | "unknown_dependency"
+    | "self_dependency"
+    | "duplicate_id"
+    | "path_conflict"
+    | "too_many_tasks";
   detail: string;
 }
 
@@ -37,9 +42,24 @@ export function parsePlan(raw: string): Plan {
  * architect is a language model: it is cheaper to reject a malformed graph here
  * than to discover halfway through that two tasks each wait on the other.
  */
-export function validatePlan(plan: Plan): PlanProblem[] {
+export function validatePlan(
+  plan: Plan,
+  limits: { maxTasks?: number } = {},
+): PlanProblem[] {
   const problems: PlanProblem[] = [];
   const ids = new Set<string>();
+
+  // An oversized plan is rejected here, where the architect can still be told
+  // to cut it, rather than discovered as an exhausted budget an hour later.
+  const maxTasks = limits.maxTasks ?? Infinity;
+  if (plan.tasks.length > maxTasks) {
+    problems.push({
+      kind: "too_many_tasks",
+      detail:
+        `the plan has ${plan.tasks.length} tasks and the run allows ${maxTasks}; ` +
+        `merge the smallest ones together or cut scope`,
+    });
+  }
 
   for (const task of plan.tasks) {
     if (ids.has(task.id)) {

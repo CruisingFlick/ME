@@ -190,7 +190,9 @@ not the built project's database.
 **Convergence.** A review loop that will not settle is stopped after
 `HIVE_MAX_REVIEW_ROUNDS`. A task whose dependency was abandoned is abandoned
 rather than waited on. A reviewer that talks without rendering a verdict counts
-as *request changes*, never as approval.
+as *request changes*, never as approval. The work graph itself is bounded by
+`HIVE_MAX_TASKS`: an integrator can add work the plan missed, but not without
+end, because a graph that grows every round never finishes.
 
 **One process per run.** A run takes a lock naming the process holding it, and
 a second one is refused rather than allowed to collide. Two processes on the

@@ -27,7 +27,23 @@ export class TaskGraph {
     private readonly store: Store,
     private readonly ledger: Ledger,
     private readonly runId: string,
+    /**
+     * The ceiling on the whole graph.
+     *
+     * add_task exists so an integrator can hand real discovered work to a
+     * builder instead of half-doing it itself, and that is worth having. But
+     * nothing stopped an agent adding a task every round, and a run that keeps
+     * growing its own work graph does not converge - it ends as an exhausted
+     * budget that names no cause. Held here rather than in the tool because
+     * this is the one thing that knows the whole graph, on a resume too.
+     */
+    private readonly maxTasks = Infinity,
   ) {}
+
+  /** How many more tasks the run may take on. */
+  headroom(): number {
+    return Math.max(0, this.maxTasks - this.tasks.size);
+  }
 
   async load(): Promise<void> {
     const existing = await this.store.listTasks(this.runId);

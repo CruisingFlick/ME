@@ -7,7 +7,7 @@ working *on* it.
 ## Commands
 
 ```bash
-npm test                 # 134 tests, ~15s, no network
+npm test                 # 143 tests, ~15s, no network
 npm run typecheck
 npm run demo             # full pipeline against the mock provider, no key needed
 npm run hive -- doctor   # what is configured
@@ -81,6 +81,12 @@ These each exist because the alternative failed in a real run:
   commits nothing and the task is rejected for "no changes".
 - **Capabilities are decided before the run.** Nothing grants itself anything
   mid-run; there is nobody to ask.
+- **The work graph has a ceiling.** `add_task` is how an integrator hands real
+  discovered work to a builder instead of half-doing it itself, which is worth
+  having - but a graph that grows every round does not converge, and the run
+  then ends as an exhausted budget that names no cause. `HIVE_MAX_TASKS` bounds
+  the plan and mid-run additions together; the refusal tells the agent to report
+  the finding instead, so it is not lost.
 
 ## Testing
 

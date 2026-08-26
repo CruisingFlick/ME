@@ -302,6 +302,7 @@ async function doctor(): Promise<number> {
   lines.push(`  wall clock       ${config.HIVE_WALL_CLOCK_MINUTES} minutes`);
   lines.push(`  parallel builders ${config.HIVE_MAX_PARALLEL}`);
   lines.push(`  review rounds    ${config.HIVE_MAX_REVIEW_ROUNDS}`);
+  lines.push(`  work graph       ${config.HIVE_MAX_TASKS} tasks max`);
   lines.push(`  state            ${config.HIVE_DATABASE_URL ? "postgres" : "in-memory (set HIVE_DATABASE_URL for durable runs)"}`);
 
   const denied = (["db:destructive", "deploy:production", "email:send", "auth:admin"] as const).filter(

@@ -3,6 +3,14 @@ import { Blackboard } from "../src/kernel/blackboard.js";
 import { MessageBus } from "../src/kernel/bus.js";
 import { Ledger } from "../src/kernel/ledger.js";
 import { MemoryStore } from "../src/kernel/store/memory.js";
+import { Budget } from "../src/kernel/budget.js";
+import { KillSwitch } from "../src/kernel/killswitch.js";
+import { PolicyEngine } from "../src/kernel/policy.js";
+import { TaskGraph } from "../src/kernel/tasks.js";
+import { addTaskTool } from "../src/tools/collab.js";
+import { buildIntegrations } from "../src/integrations/index.js";
+import type { ToolContext } from "../src/tools/types.js";
+import { logger } from "../src/util/log.js";
 
 const STATE_DIR = "/tmp/hive-test-state";
 
@@ -108,5 +116,65 @@ describe("Blackboard secrecy", () => {
     await board.put("infra.database", { connectionUri: "postgres://u:pw@h/db" }, "operator-1");
     const entry = await board.get("infra.database");
     expect(JSON.stringify(entry?.value)).toContain("pw");
+  });
+});
+
+describe("add_task", () => {
+  async function context(maxTasks: number): Promise<ToolContext> {
+    const store = new MemoryStore();
+    await store.init();
+    const ledger = new Ledger(store, "run_add", STATE_DIR);
+    const tasks = new TaskGraph(store, ledger, "run_add", maxTasks);
+    await tasks.load();
+    return {
+      runId: "run_add",
+      agent: {
+        id: "integrator-1",
+        role: "integrator",
+        provider: "mock",
+        model: "m",
+        capabilities: ["task:manage"],
+      },
+      workspace: "/tmp",
+      bus: new MessageBus(store, ledger, "run_add"),
+      board: new Blackboard(store, ledger, "run_add"),
+      tasks,
+      ledger,
+      policy: new PolicyEngine({ runGrants: new Set(["task:manage"]), workspace: "/tmp" }),
+      budget: new Budget({
+        maxRunUsd: 1,
+        maxAgentUsd: 1,
+        maxTurnsPerTask: 5,
+        maxWallClockMs: 120_000,
+      }),
+      kill: new KillSwitch(STATE_DIR),
+      integrations: buildIntegrations(),
+      log: logger("test"),
+    };
+  }
+
+  it("adds work the plan missed", async () => {
+    const ctx = await context(4);
+    const result = await addTaskTool.run(
+      { title: "wire the router", brief: "the plan forgot it" },
+      ctx,
+    );
+    expect(result.isError).toBeFalsy();
+    expect(ctx.tasks.all()).toHaveLength(1);
+  });
+
+  it("refuses once the work graph is full, and says what to do instead", async () => {
+    // add_task exists so an integrator can hand real discovered work to a
+    // builder. Unbounded, it is also how a run stops converging: a graph that
+    // grows every round ends as an exhausted budget naming no cause.
+    const ctx = await context(1);
+    await addTaskTool.run({ title: "first", brief: "b" }, ctx);
+
+    const refused = await addTaskTool.run({ title: "second", brief: "b" }, ctx);
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain("size limit");
+    // The finding is not lost - the agent is told where to put it.
+    expect(refused.content).toContain("summary");
+    expect(ctx.tasks.all()).toHaveLength(1);
   });
 });

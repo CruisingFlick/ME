@@ -94,6 +94,8 @@ const Schema = z.object({
   HIVE_MAX_TURNS: z.coerce.number().int().positive().default(40),
   HIVE_MAX_PARALLEL: z.coerce.number().int().positive().default(3),
   HIVE_MAX_REVIEW_ROUNDS: z.coerce.number().int().positive().default(3),
+  /** Ceiling on the size of the work graph, plan and mid-run additions together. */
+  HIVE_MAX_TASKS: z.coerce.number().int().positive().default(30),
   HIVE_WALL_CLOCK_MINUTES: z.coerce.number().positive().default(90),
   /** Comma-separated capabilities the run may exercise. */
   HIVE_GRANTS: z.string().default(DEFAULT_GRANTS_CSV()),

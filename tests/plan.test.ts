@@ -76,3 +76,34 @@ describe("validatePlan", () => {
     expect(validatePlan(plan)).toEqual([]);
   });
 });
+
+describe("the size of a plan", () => {
+  const oversized = {
+    ...base,
+    tasks: Array.from({ length: 6 }, (_, i) => ({
+      id: `t${i}`,
+      title: "A",
+      brief: "b",
+      paths: [`src/${i}.ts`],
+      dependsOn: [],
+      role: "builder",
+    })),
+  };
+
+  it("is not checked unless the run sets a ceiling", () => {
+    expect(validatePlan(parsePlan(JSON.stringify(oversized)))).toEqual([]);
+  });
+
+  it("is rejected while the architect can still be told to cut it", () => {
+    // Cheaper here than as an exhausted budget an hour later that names no
+    // cause: the architect gets the problem back and re-plans.
+    const problems = validatePlan(parsePlan(JSON.stringify(oversized)), { maxTasks: 4 });
+    expect(problems.map((p) => p.kind)).toContain("too_many_tasks");
+    expect(problems[0]?.detail).toContain("6 tasks");
+    expect(problems[0]?.detail).toContain("allows 4");
+  });
+
+  it("accepts a plan that exactly fills the ceiling", () => {
+    expect(validatePlan(parsePlan(JSON.stringify(oversized)), { maxTasks: 6 })).toEqual([]);
+  });
+});
