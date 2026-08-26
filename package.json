@@ -4,8 +4,12 @@
   "private": true,
   "type": "module",
   "description": "Autonomous multi-model engineering swarm: many AI agents plan, build, review and ship a project together with no human in the loop.",
-  "engines": { "node": ">=20.10" },
-  "bin": { "hive": "./dist/cli.js" },
+  "engines": {
+    "node": ">=20.10"
+  },
+  "bin": {
+    "hive": "./dist/cli.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -25,6 +29,6 @@
     "@types/pg": "^8.11.10",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "vitest": "^4.1.11"
   }
 }
