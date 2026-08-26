@@ -174,9 +174,28 @@ function mapStopReason(reason: Anthropic.Message["stop_reason"]): StopReason {
 
 function asProviderError(err: unknown): ProviderError {
   if (err instanceof Anthropic.APIError) {
-    const status = err.status ?? 0;
-    const retryable = status === 429 || status >= 500 || err instanceof Anthropic.APIConnectionError;
-    return new ProviderError(`anthropic ${status}: ${err.message}`, "anthropic", retryable);
+    const status = statusOf(err);
+    const overloaded = /overloaded/i.test(err.message);
+    const retryable =
+      overloaded || status === 429 || status >= 500 || err instanceof Anthropic.APIConnectionError;
+    // "Overloaded" means the service is busy, not that anything is wrong with
+    // the request or the key. Saying so is the difference between waiting a
+    // moment and going to regenerate a perfectly good credential.
+    const label = overloaded
+      ? "anthropic is busy (overloaded); this is transient, retry shortly"
+      : `anthropic ${status || "error"}: ${err.message}`;
+    return new ProviderError(label, "anthropic", retryable);
   }
   return new ProviderError(`anthropic: ${String(err)}`, "anthropic", false);
+}
+
+/**
+ * The status is not always on `.status`: an overload arrives as a body with no
+ * usable status, which surfaced as a meaningless "anthropic 0:".
+ */
+function statusOf(err: InstanceType<typeof Anthropic.APIError>): number {
+  const direct = err.status;
+  if (typeof direct === "number" && direct > 0) return direct;
+  const nested = (err as { error?: { status?: number } }).error?.status;
+  return typeof nested === "number" ? nested : 0;
 }

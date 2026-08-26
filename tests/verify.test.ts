@@ -40,3 +40,43 @@ describe("credential checks", () => {
     expect(result.detail.length).toBeLessThanOrEqual(183);
   });
 });
+
+describe("telling apart the reasons a check can fail", () => {
+  it("classifies an overloaded service as busy, not broken", async () => {
+    // A busy API and a bad key both arrive as an error. Calling the first one
+    // "your credential does not work" sends someone to regenerate a good key.
+    const result = await check("anthropic", "model", true, null, async () => {
+      throw new Error(
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      );
+    });
+
+    expect(result.status).toBe("busy");
+  });
+
+  it.each([
+    "rate_limit_error: too many requests",
+    "HTTP 529 temporarily unavailable",
+  ])("classifies %j as busy", async (message) => {
+    const result = await check("anthropic", "model", true, null, async () => {
+      throw new Error(message);
+    });
+    expect(result.status).toBe("busy");
+  });
+
+  it("still calls a genuine credential failure a failure", async () => {
+    const result = await check("anthropic", "model", true, null, async () => {
+      throw new Error("authentication_error: invalid x-api-key");
+    });
+
+    expect(result.status).toBe("failed");
+  });
+
+  it("does not confuse a blocked host with a busy one", async () => {
+    const result = await check("neon", "service", true, null, async () => {
+      throw new Error("Host not in allowlist: console.neon.tech");
+    });
+
+    expect(result.status).toBe("unreachable");
+  });
+});

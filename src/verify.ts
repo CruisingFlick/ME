@@ -9,7 +9,7 @@
 export interface VerifyResult {
   name: string;
   kind: "model" | "service";
-  status: "ok" | "failed" | "not_configured" | "unreachable";
+  status: "ok" | "failed" | "not_configured" | "unreachable" | "busy";
   detail: string;
   ms: number;
 }
@@ -22,6 +22,19 @@ export interface VerifyResult {
  * run that reports "your credential does not work" when the credential was
  * never sent sends someone to regenerate a perfectly good key.
  */
+/**
+ * A service that is temporarily busy is not a broken credential.
+ *
+ * An overloaded API returns an error like any other, and calling that "your
+ * credential does not work" sends someone to regenerate a key that was fine -
+ * the same mistake as blaming a blocked network on the credential.
+ */
+export function isTransientlyBusy(message: string): boolean {
+  return /overloaded|rate.?limit|too many requests|\b429\b|\b503\b|\b529\b|temporarily unavailable/i.test(
+    message,
+  );
+}
+
 export function isNetworkBlocked(message: string): boolean {
   return /not in allowlist|egress policy|CONNECT tunnel failed|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|proxy/i.test(
     message,
@@ -82,7 +95,11 @@ export async function check(
     return {
       name,
       kind,
-      status: isNetworkBlocked(message) ? "unreachable" : "failed",
+      status: isNetworkBlocked(message)
+        ? "unreachable"
+        : isTransientlyBusy(message)
+          ? "busy"
+          : "failed",
       detail: trim(message),
       ms: Date.now() - started,
     };

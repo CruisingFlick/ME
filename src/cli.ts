@@ -366,7 +366,9 @@ async function verify(deep = false): Promise<number> {
             ? "FAIL"
             : result.status === "unreachable"
               ? "NET "
-              : "--  ";
+              : result.status === "busy"
+                ? "BUSY"
+                : "--  ";
       const timing = result.ms > 0 ? ` (${result.ms}ms)` : "";
       process.stdout.write(`  ${mark} ${result.name.padEnd(width)}  ${result.detail}${timing}\n`);
     }
@@ -375,6 +377,15 @@ async function verify(deep = false): Promise<number> {
 
   const failed = results.filter((r) => r.status === "failed");
   const unreachable = results.filter((r) => r.status === "unreachable");
+  const busy = results.filter((r) => r.status === "busy");
+
+  if (busy.length > 0) {
+    process.stdout.write(
+      `${busy.length} service(s) were busy: ${busy.map((r) => r.name).join(", ")}\n` +
+        `That is the service asking you to wait, not a problem with the credential. ` +
+        `Run verify again in a moment.\n\n`,
+    );
+  }
 
   if (unreachable.length > 0) {
     process.stdout.write(
