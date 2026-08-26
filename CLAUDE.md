@@ -7,7 +7,7 @@ working *on* it.
 ## Commands
 
 ```bash
-npm test                 # 143 tests, ~15s, no network
+npm test                 # 147 tests, ~15s, no network
 npm run typecheck
 npm run demo             # full pipeline against the mock provider, no key needed
 npm run hive -- doctor   # what is configured
@@ -64,6 +64,13 @@ These each exist because the alternative failed in a real run:
   own instead.
 - **Rejection funnels through `rejectTask`** whatever the cause, so the round
   budget is spent identically and nothing can loop for free.
+- **A project is published as one commit.** Pushing file by file through the
+  contents API turned a 17-file project into 17 commits with one message, and
+  every commit but the last was a tree that does not build - so anything
+  watching the branch saw a broken project, and a run that died partway left one
+  behind saying nothing. `pushTree` parents on the branch when it exists, or the
+  default branch when it does not; parenting always on the default branch drops
+  whatever an earlier push landed that this one does not mention.
 - **Sensitive blackboard keys are withheld from the rendered board**, which goes
   into every agent's context on every turn.
 - **An agent is told when its turns are nearly gone.** It cannot budget what it

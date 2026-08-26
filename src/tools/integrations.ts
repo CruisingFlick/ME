@@ -62,19 +62,28 @@ export const githubPushTool: HiveTool = {
     const paths = strArray(input, "paths");
     if (paths.length === 0) return fail("no paths given");
 
+    // Read everything first: a file that escapes the workspace must stop the
+    // push before any of it is published, not halfway through.
+    const files: Array<{ path: string; content: string }> = [];
+    for (const path of paths) {
+      const resolved = context.policy.resolveInWorkspace(path);
+      if (!("path" in resolved)) return fail(resolved.reason);
+      files.push({ path, content: readFileSync(resolved.path, "utf8") });
+    }
+
     try {
-      await github.createBranch(repo, branch).catch(() => branch); // already exists is fine
-      const commits: string[] = [];
-      for (const path of paths) {
-        const resolved = context.policy.resolveInWorkspace(path);
-        if (!("path" in resolved)) return fail(resolved.reason);
-        const content = readFileSync(resolved.path, "utf8");
-        const result = await github.putFile(repo, path, content, str(input, "message"), branch);
-        commits.push(result.commit);
-      }
-      await audit(context, "github", "push_files", { branch, files: paths.length });
+      // One commit holding every file, not one commit per file.
+      //
+      // The per-file loop this replaces published a 17-file project as 17
+      // commits with the same message, and - worse than the unreadable history
+      // - every commit but the last was a tree that does not build. Anything
+      // watching the branch saw a broken project, and a run that died mid-loop
+      // left one behind with nothing to say so.
+      const result = await github.pushTree(repo, branch, files, str(input, "message"));
+      await audit(context, "github", "push_files", { branch, files: files.length });
       return ok(
-        `pushed ${paths.length} file(s) to ${repo.owner}/${repo.repo}@${branch}; head ${commits.at(-1)?.slice(0, 8)}`,
+        `pushed ${files.length} file(s) to ${repo.owner}/${repo.repo}@${branch} ` +
+          `in one commit ${result.commit.slice(0, 8)}`,
       );
     } catch (err) {
       return fail(`github push failed: ${String(err)}`);

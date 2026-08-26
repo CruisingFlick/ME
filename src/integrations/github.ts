@@ -119,6 +119,21 @@ export class GitHub {
     return branch;
   }
 
+  /** The head of `branch`, or null when the branch does not exist yet. */
+  private async branchSha(ref: RepoRef, branch: string): Promise<string | null> {
+    try {
+      const head = await request<{ object: { sha: string } }>(
+        "github",
+        `${API}/repos/${ref.owner}/${ref.repo}/git/ref/heads/${branch}`,
+        { headers: this.headers(), retries: 1 },
+      );
+      return head.object.sha;
+    } catch (err) {
+      if (err instanceof IntegrationError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
   /**
    * The commit a new branch should start from.
    *
@@ -206,7 +221,11 @@ export class GitHub {
     message: string,
   ): Promise<{ commit: string; branch: string }> {
     const base = `${API}/repos/${ref.owner}/${ref.repo}`;
-    const parent = await this.baseSha(ref);
+    // Parent on the branch when it is already there, so a second push adds to
+    // it rather than replacing it with a commit built on the default branch -
+    // which would silently drop every file the first push landed and this one
+    // does not mention.
+    const parent = (await this.branchSha(ref, branch)) ?? (await this.baseSha(ref));
 
     const blobs = await Promise.all(
       files.map(async (file) => {
