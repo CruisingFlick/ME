@@ -143,6 +143,48 @@ describe("Workspaces", () => {
   });
 });
 
+describe("a task whose work is already committed", () => {
+  it("still reports its work when a later round adds nothing", async () => {
+    // The exact failure this prevents: a builder's work was committed on an
+    // earlier attempt, so a retry correctly finds nothing left to do. Judging
+    // by uncommitted changes would call that "no changes" and send the task
+    // back until it was abandoned - with the finished work on its own branch.
+    const dir = await ws.forTask("t1");
+    write(dir, "server.ts", "export const app = 1;\n");
+
+    const first = await ws.commitTask("t1", "build the server");
+    expect(first).toMatchObject({ committed: true, filesChanged: 1 });
+
+    // A second round changes nothing: the work was already done and committed.
+    const second = await ws.commitTask("t1", "build the server");
+    expect(second.committed).toBe(true);
+    expect(second.filesChanged).toBe(1);
+  });
+
+  it("still reports nothing when the task genuinely did nothing", async () => {
+    await ws.forTask("t2");
+    expect(await ws.commitTask("t2", "nothing")).toEqual({
+      committed: false,
+      filesChanged: 0,
+    });
+  });
+
+  it("reports nothing when the work is identical to what already landed", async () => {
+    const first = await ws.forTask("t1");
+    write(first, "shared.ts", "export const x = 1;\n");
+    await ws.commitTask("t1", "add shared");
+    await ws.mergeTask("t1");
+
+    // A later task that recreates a file byte-for-byte has added nothing.
+    const second = await ws.forTask("t2");
+    write(second, "shared.ts", "export const x = 1;\n");
+    expect(await ws.commitTask("t2", "same content")).toMatchObject({
+      committed: false,
+      filesChanged: 0,
+    });
+  });
+});
+
 describe("resuming an interrupted run", () => {
   it("adopts a worktree left behind by a previous process", async () => {
     const first = await ws.forTask("t1");

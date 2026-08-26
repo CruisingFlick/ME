@@ -46,7 +46,9 @@ These each exist because the alternative failed in a real run:
 - **Every terminal state is reached explicitly.** A missing review verdict is
   *request changes*, never approval. Nothing may pass by absence.
 - **A completed task with an empty diff is rejected** unless it set
-  `no_changes_needed`, and that claim goes to review like any other.
+  `no_changes_needed`, and that claim goes to review like any other. "Empty"
+  means the task's branch matches the integration branch - never "nothing was
+  committed this round", which is normal on any retry.
 - **A halt or exhausted budget leaves its in-flight tasks recoverable.** Those
   are facts about the run, not judgements on the task.
 - **Failed merges are always aborted.** A repo stuck mid-merge poisons every

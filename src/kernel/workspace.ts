@@ -116,17 +116,33 @@ export class Workspaces {
     return path;
   }
 
-  /** Commit whatever the builder left behind. An empty diff is a real answer. */
+  /**
+   * Commit whatever the builder left behind, and report whether the task has
+   * produced anything at all.
+   *
+   * The question that matters is whether this task's branch differs from the
+   * integration branch - not whether this particular round added something new.
+   * Those are different, and conflating them breaks every retry: a builder
+   * whose work was already committed on an earlier attempt correctly finds
+   * nothing left to do, and would be told it changed nothing and sent back,
+   * round after round, until the task was abandoned with its work sitting
+   * finished on its own branch.
+   */
   async commitTask(taskId: string, message: string): Promise<CommitResult> {
     const path = join(this.worktreeRoot, taskId);
     if (!existsSync(path)) return { committed: false, filesChanged: 0 };
 
     await this.git(path, ["add", "-A"]);
     const status = await this.git(path, ["status", "--porcelain"]);
-    const filesChanged = status.stdout.split("\n").filter(Boolean).length;
+    if (status.stdout.split("\n").filter(Boolean).length > 0) {
+      await this.git(path, ["commit", "-m", message]);
+    }
+
+    // What does this branch hold relative to what has already landed?
+    const changed = await this.git(path, ["diff", "--name-only", "hive-main...HEAD"]);
+    const filesChanged = changed.stdout.split("\n").filter(Boolean).length;
     if (filesChanged === 0) return { committed: false, filesChanged: 0 };
 
-    await this.git(path, ["commit", "-m", message]);
     const head = await this.git(path, ["rev-parse", "HEAD"]);
     return { committed: true, sha: head.stdout.trim(), filesChanged };
   }
