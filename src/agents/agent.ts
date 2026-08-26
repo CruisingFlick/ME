@@ -132,15 +132,12 @@ export class Agent {
         // No tool calls and no signal: the agent believes it is done but never
         // said so through a tool. Nudge once, then take its prose as the answer.
         if (turn < maxTurns) {
-          messages.push({
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: this.noSignalNudge(),
-              },
-            ],
-          });
+          // An agent can burn turns on prose as easily as on tool calls, so the
+          // budget warning belongs on this path too.
+          const left = maxTurns - turn;
+          const text =
+            left <= 2 ? `${this.noSignalNudge()}\n\n${this.lastCallWarning(left)}` : this.noSignalNudge();
+          messages.push({ role: "user", content: [{ type: "text", text }] });
           continue;
         }
         return { kind: "text", text: lastText, turns: turn };
@@ -166,6 +163,13 @@ export class Agent {
 
       const inbox = await this.drainInbox();
       if (inbox) parts.push({ type: "text", text: inbox });
+
+      // Tell an agent when it is running out of turns. Without this it cannot
+      // budget: a reviewer verifying carefully would spend its last turn
+      // mid-investigation and never render a verdict, and the work it had
+      // actually approved of was sent back as unreviewed.
+      const remaining = maxTurns - turn;
+      if (remaining <= 2) parts.push({ type: "text", text: this.lastCallWarning(remaining) });
 
       messages.push({ role: "user", content: parts });
     }
@@ -247,6 +251,23 @@ export class Agent {
     const messages = await this.freshInbox();
     if (messages.length === 0) return null;
     return `# New messages\n${renderInbox(messages)}`;
+  }
+
+  /** Told to an agent with almost no turns left, so it can still conclude. */
+  private lastCallWarning(remaining: number): string {
+    const finisher =
+      this.spec.role === "reviewer"
+        ? "submit_review with your verdict"
+        : this.spec.role === "architect"
+          ? "the plan JSON"
+          : "complete_task, or block_task if you cannot proceed";
+    return (
+      `# Turn budget\n` +
+      `You have ${remaining} turn${remaining === 1 ? "" : "s"} left. ` +
+      `Stop investigating and finish now: return ${finisher} on this turn, ` +
+      `based on what you already know. Ending without it means your work is ` +
+      `discarded and the task is treated as unfinished.`
+    );
   }
 
   private noSignalNudge(): string {

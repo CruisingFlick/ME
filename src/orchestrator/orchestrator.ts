@@ -664,7 +664,9 @@ export class Orchestrator {
         `This is review round ${task.reviewRounds + 1} of ${this.config.HIVE_MAX_REVIEW_ROUNDS}. ` +
         `If the work satisfies the brief, approve it; do not withhold approval over style.`,
       taskId: task.id,
-      maxTurns: 12,
+      // Reviewing an HTTP service means starting it and probing it; twelve
+      // turns was not enough and the verdict was the thing that got cut.
+      maxTurns: this.config.HIVE_MAX_TURNS,
     });
 
     if (outcome.signal?.name === "submit_review") {

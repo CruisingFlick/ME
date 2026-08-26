@@ -57,6 +57,9 @@ These each exist because the alternative failed in a real run:
   budget is spent identically and nothing can loop for free.
 - **Sensitive blackboard keys are withheld from the rendered board**, which goes
   into every agent's context on every turn.
+- **An agent is told when its turns are nearly gone.** It cannot budget what it
+  cannot see: a reviewer verifying carefully spent its last turn mid-inquiry and
+  never rendered a verdict, so work it had all but approved came back unreviewed.
 - **Every shell command returns.** `run_command` settles on its own timer and
   kills the whole process tree, because a shell's orphaned grandchild holds the
   stdout pipe open and `close` then never fires - a run that hangs with no

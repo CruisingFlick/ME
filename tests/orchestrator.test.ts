@@ -372,6 +372,35 @@ describe("Orchestrator", () => {
     expect(provider.seen.length).toBeGreaterThanOrEqual(0);
   });
 
+  it("warns an agent when its turns are nearly gone", async () => {
+    // The failure this prevents: a reviewer verifying carefully spends its last
+    // turn mid-investigation and never renders a verdict, so work it had all
+    // but approved is returned as unreviewed and eventually abandoned.
+    let sawWarning = false;
+    await runWith(
+      {
+        reviewer: (request) => {
+          const warned = request.messages.some((turn) =>
+            turn.content.some(
+              (part) => part.type === "text" && part.text.includes("# Turn budget"),
+            ),
+          );
+          if (warned) {
+            sawWarning = true;
+            return reply("wrapping up", [
+              call("submit_review", { verdict: "approve", summary: "concluded on the warning" }),
+            ]);
+          }
+          // Burn turns without deciding, the way a thorough reviewer does.
+          return reply("still looking into it...");
+        },
+      },
+      { HIVE_MAX_TURNS: "4" },
+    );
+
+    expect(sawWarning).toBe(true);
+  });
+
   it("records the run in an append-only ledger", async () => {
     const { report } = await runWith({});
     const { readFileSync } = await import("node:fs");
