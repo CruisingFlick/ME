@@ -52,6 +52,34 @@ export class Ledger {
     return event;
   }
 
+  /**
+   * Append an event without touching the store.
+   *
+   * Safe to call from a crash handler, where nothing asynchronous will ever get
+   * a chance to run. Every silent death in this project has been expensive for
+   * one reason: the ledger simply stopped, and a log that goes quiet says
+   * nothing about why.
+   */
+  recordSync(
+    type: LedgerEventType,
+    actor: string,
+    data: Record<string, unknown> = {},
+  ): void {
+    const event: LedgerEvent = {
+      id: id("ev"),
+      runId: this.runId,
+      type,
+      actor,
+      at: nowIso(),
+      data,
+    };
+    try {
+      appendFileSync(this.jsonlPath, JSON.stringify(event) + "\n");
+    } catch {
+      // there is nothing left to fall back to
+    }
+  }
+
   async history(): Promise<LedgerEvent[]> {
     return this.store.listEvents(this.runId);
   }

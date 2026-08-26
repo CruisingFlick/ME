@@ -60,6 +60,9 @@ These each exist because the alternative failed in a real run:
 - **An agent is told when its turns are nearly gone.** It cannot budget what it
   cannot see: a reviewer verifying carefully spent its last turn mid-inquiry and
   never rendered a verdict, so work it had all but approved came back unreviewed.
+- **A process that dies says why.** Uncaught exceptions, unhandled rejections,
+  signals and unexplained exits are all written to the ledger synchronously. A
+  log that simply stops is the most expensive thing in this project to debug.
 - **Every shell command returns.** `run_command` settles on its own timer and
   kills the whole process tree, because a shell's orphaned grandchild holds the
   stdout pipe open and `close` then never fires - a run that hangs with no

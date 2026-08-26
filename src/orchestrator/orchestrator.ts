@@ -6,6 +6,7 @@ import { Blackboard } from "../kernel/blackboard.js";
 import { Budget } from "../kernel/budget.js";
 import { MessageBus } from "../kernel/bus.js";
 import { KillSwitch } from "../kernel/killswitch.js";
+import { recordCrashes } from "../kernel/crash.js";
 import { Ledger } from "../kernel/ledger.js";
 import { PolicyEngine } from "../kernel/policy.js";
 import { RunLock } from "../kernel/runlock.js";
@@ -184,6 +185,9 @@ export class Orchestrator {
     // same task and spawn builders into the same worktree.
     this.w.lock.acquire();
 
+    // From here on, however this process ends, it says so in the ledger.
+    const stopRecordingCrashes = recordCrashes(this.w.ledger);
+
     // A halt left over from a previous run would stop this one before it starts.
     // Resuming is itself an instruction to continue, so the halt clears either way.
     this.w.kill.reset();
@@ -279,6 +283,7 @@ export class Orchestrator {
       spend: report.spendSummary,
       phases,
     });
+    stopRecordingCrashes();
     await this.w.board.put("run.report", report, "orchestrator");
     log.info(`run ${this.runId} ${status} - ${report.spendSummary}`);
     return report;
