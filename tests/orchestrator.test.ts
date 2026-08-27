@@ -138,7 +138,7 @@ async function runWith(
   });
   const report = await orchestrator.run();
   await orchestrator.close();
-  return { report, provider };
+  return { report, provider, ledger: await store.listEvents(report.runId) };
 }
 
 const WIDE_PLAN = {
@@ -280,14 +280,31 @@ describe("Orchestrator", () => {
     kill.reset();
   });
 
-  it("stops spending once the run cap is reached", async () => {
+  it("stops spending once the run cap is reached, and says so was the reason", async () => {
     // Every mock call costs $0.001, so a $0.002 cap is exhausted almost at once.
-    const { report } = await runWith({}, { HIVE_MAX_USD: "0.002", HIVE_MAX_AGENT_USD: "0.002" });
+    const { report, ledger } = await runWith(
+      {},
+      { HIVE_MAX_USD: "0.002", HIVE_MAX_AGENT_USD: "0.002" },
+    );
 
-    expect(report.status).toBe("failed");
+    // Stopping at a guardrail is not a failure of the work: the run stopped
+    // deliberately and what is in flight stays recoverable. What matters is
+    // that it reaches the same terminal state wherever the cap lands - this
+    // reported "failed" from the plan phase and "halted" from execute, which
+    // made the status a fact about timing rather than about the run.
+    expect(report.status).toBe("halted");
     expect(report.usage.costUsd).toBeLessThan(0.02);
     // The run must say it ran out of money, not blame the architect's JSON.
     expect(JSON.stringify(report.notes)).toMatch(/budget|cap/i);
+
+    // And the ledger must name the real cause. Recording this as a tripped
+    // kill switch describes an operator decision that nobody made - which is
+    // exactly what a live run's ledger said when the CLI ran out of quota.
+    const stops = ledger.filter((e) =>
+      ["budget.exceeded", "killswitch.tripped", "error"].includes(e.type),
+    );
+    expect(stops.at(-1)?.type).toBe("budget.exceeded");
+    expect(stops.map((e) => e.type)).not.toContain("killswitch.tripped");
   });
 
   it("runs independent tasks in parallel and lands every one of them", async () => {

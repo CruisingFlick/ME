@@ -7,7 +7,7 @@ working *on* it.
 ## Commands
 
 ```bash
-npm test                 # 147 tests, ~15s, no network
+npm test                 # 150 tests, ~15s, no network
 npm run typecheck
 npm run demo             # full pipeline against the mock provider, no key needed
 npm run hive -- doctor   # what is configured
@@ -50,7 +50,17 @@ These each exist because the alternative failed in a real run:
   means the task's branch matches the integration branch - never "nothing was
   committed this round", which is normal on any retry.
 - **A halt or exhausted budget leaves its in-flight tasks recoverable.** Those
-  are facts about the run, not judgements on the task.
+  are facts about the run, not judgements on the task. All three stop causes -
+  a cap, a provider out of quota, an operator - report as *halted* rather than
+  failed, and each records which it was: a ledger that calls a quota exhaustion
+  a tripped kill switch describes a decision nobody made. The cause must not
+  depend on when it lands, either; an exhausted budget used to be *failed* from
+  the plan phase and *halted* from execute.
+- **An agent that answers in prose is nudged once.** It used to be nudged on
+  every remaining turn, and a model that has already said its piece just says it
+  again - five identical calls and a third of one run's spend for the plan that
+  was there after the first reply. The single nudge carries the turn budget with
+  it, because there is no second reminder.
 - **Failed merges are always aborted, and report git's own reason.** A repo
   stuck mid-merge poisons every later task. And a merge refused *before* it
   starts - because loose files in the integration checkout block the checkout -

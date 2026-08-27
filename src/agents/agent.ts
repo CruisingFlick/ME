@@ -67,6 +67,7 @@ export class Agent {
     ];
 
     let lastText = "";
+    let nudged = false;
 
     for (let turn = 1; turn <= maxTurns; turn++) {
       try {
@@ -131,17 +132,32 @@ export class Agent {
       if (result.toolCalls.length === 0) {
         // No tool calls and no signal: the agent believes it is done but never
         // said so through a tool. Nudge once, then take its prose as the answer.
-        if (turn < maxTurns) {
-          // An agent can burn turns on prose as easily as on tool calls, so the
-          // budget warning belongs on this path too.
-          const left = maxTurns - turn;
-          const text =
-            left <= 2 ? `${this.noSignalNudge()}\n\n${this.lastCallWarning(left)}` : this.noSignalNudge();
+        //
+        // Once, and once only. This nudged on every remaining turn, and an
+        // architect that had already said its piece simply said it again: five
+        // more identical calls, a third of the run's spend, and the same plan
+        // adopted at the end that was there after the first reply. A model that
+        // answers the nudge with the same answer is not going to change it.
+        if (turn < maxTurns && !nudged) {
+          // The nudge comes once, so it carries the turn budget with it. An
+          // agent that answers in prose gets no second reminder, and nothing
+          // may run out of turns without having been told - a reviewer that
+          // spent its last turn mid-inquiry is why that rule exists.
+          const text = [
+            this.noSignalNudge(),
+            "This is your only reminder. Reply again without calling a tool and " +
+              "your prose is taken as your final answer.",
+            this.lastCallWarning(maxTurns - turn),
+          ].join("\n\n");
           messages.push({ role: "user", content: [{ type: "text", text }] });
+          nudged = true;
           continue;
         }
         return { kind: "text", text: lastText, turns: turn };
       }
+
+      // Progress: a later turn that stops talking may be nudged again.
+      nudged = false;
 
       const parts: ContentPart[] = [];
       let signal: AgentOutcome["signal"] | undefined;

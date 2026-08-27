@@ -25,6 +25,34 @@ import { parsePlan, validatePlan, type Plan } from "./plan.js";
 
 const log = logger("orchestrator");
 
+type StopCause = "budget" | "provider" | "operator" | "failure";
+
+const LEDGER_FOR_STOP = {
+  budget: "budget.exceeded",
+  provider: "error",
+  operator: "killswitch.tripped",
+  failure: "error",
+} as const;
+
+/**
+ * Why a run stopped, from the message that stopped it.
+ *
+ * The same cause has to reach the same terminal state wherever it happens: an
+ * exhausted budget used to report "failed" when it landed during planning and
+ * "halted" when it landed during execution, which made the report's status a
+ * fact about timing rather than about the run.
+ *
+ * Order matters - a budget trip goes through the kill switch, so its message
+ * says "run halted" too, and the more specific cause has to be read first.
+ */
+function stopCause(message: string): StopCause {
+  if (/spend or time cap|budget|wall clock/i.test(message)) return "budget";
+  if (/model provider failed|quota|provider error/i.test(message)) return "provider";
+  if (message.startsWith("run halted") || message.includes("(halted)")) return "operator";
+  return "failure";
+}
+
+
 export interface RunOptions {
   /** The project specification, in prose. */
   spec: string;
@@ -258,14 +286,17 @@ export class Orchestrator {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const halted = message.startsWith("run halted") || message.includes("(halted)");
-      status = halted ? "halted" : "failed";
+      const cause = stopCause(message);
+      // Stopping at a guardrail is not the same as failing. A cap reached, a
+      // provider out of quota and an operator pulling the plug all leave the
+      // work recoverable, so all three report as halted - but each says which
+      // it was, because a ledger that calls a quota exhaustion a kill switch
+      // describes an operator decision that nobody made.
+      status = cause === "failure" ? "failed" : "halted";
       phases.push({ phase: "run", ok: false, detail: message });
       notes.push(message);
-      await this.w.ledger.record(halted ? "killswitch.tripped" : "error", "orchestrator", {
-        error: message,
-      });
-      log.error(halted ? "run halted" : "run failed", message);
+      await this.w.ledger.record(LEDGER_FOR_STOP[cause], "orchestrator", { error: message, cause });
+      log.error(cause === "failure" ? "run failed" : `run stopped (${cause})`, message);
     }
 
     await this.w.workspaces.cleanup();
