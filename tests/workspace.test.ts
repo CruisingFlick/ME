@@ -325,3 +325,43 @@ describe("leftovers in the integration checkout", () => {
     expect(merge.detail).toMatch(/MERGE_HEAD/);
   });
 });
+
+describe("a halted run's work", () => {
+  it("is still there after cleanup and a resume", async () => {
+    // The invariant this enforces: a halt leaves its in-flight tasks
+    // recoverable. It did not. cleanup() removed the checkout, and the resume
+    // then found no path on disk, deleted the task's branch and started it
+    // again from HEAD - so every task that had committed work but had not been
+    // merged lost all of it, while the resume told its builder the work was
+    // still in its checkout.
+    const dir = await ws.forTask("t2");
+    write(dir, "greet.js", "export const greet = () => 'hi';\n");
+    expect(await ws.commitTask("t2", "implement greet")).toMatchObject({
+      committed: true,
+      filesChanged: 1,
+    });
+
+    await ws.cleanup();
+
+    const resumed = new Workspaces(ROOT, "run_test");
+    await resumed.init();
+    const recovered = await resumed.forTask("t2");
+
+    expect(readFileSync(join(recovered, "greet.js"), "utf8")).toContain("greet");
+    expect(await resumed.commitTask("t2", "nothing new")).toMatchObject({ committed: true });
+  });
+
+  it("is still discarded when a fresh checkout is asked for", async () => {
+    // A failed merge asks for fresh precisely to redo the work on top of what
+    // landed since, so there the branch must go.
+    const dir = await ws.forTask("t3");
+    write(dir, "draft.js", "half-finished\n");
+    await ws.commitTask("t3", "draft");
+    await ws.cleanup();
+
+    const resumed = new Workspaces(ROOT, "run_test");
+    await resumed.init();
+    const rebuilt = await resumed.forTask("t3", { fresh: true });
+    expect(existsSync(join(rebuilt, "draft.js"))).toBe(false);
+  });
+})

@@ -108,6 +108,23 @@ export class Workspaces {
 
     const branch = this.branchFor(taskId);
     await this.git(this.integration, ["worktree", "remove", "--force", path]);
+
+    // A branch that already exists holds this task's committed work, and
+    // re-attaching a checkout to it is what resuming means. Deleting it and
+    // branching afresh from HEAD is how a halted run used to lose everything
+    // its builders had finished: cleanup removes the checkout but not the
+    // branch, so the resume found no path on disk and took this route.
+    //
+    // A caller asking for a fresh checkout means the opposite - redo the work
+    // on top of what has landed since - so there the branch does go.
+    const existing = await this.git(this.integration, ["rev-parse", "--verify", branch]);
+    if (!options.fresh && existing.code === 0) {
+      await this.git(this.integration, ["worktree", "add", path, branch]);
+      this.created.add(taskId);
+      log.info(`reattached ${taskId} to existing branch ${branch}`);
+      return path;
+    }
+
     await this.git(this.integration, ["branch", "-D", branch]);
     await this.git(this.integration, ["worktree", "add", "-b", branch, path, "HEAD"]);
 

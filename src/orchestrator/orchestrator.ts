@@ -25,6 +25,9 @@ import { parsePlan, validatePlan, type Plan } from "./plan.js";
 
 const log = logger("orchestrator");
 
+/** The integration branch at its base commit holds only the .gitignore. */
+const BASE_TRACKED_FILES = 1;
+
 type StopCause = "budget" | "provider" | "operator" | "failure";
 
 const LEDGER_FOR_STOP = {
@@ -260,13 +263,48 @@ export class Orchestrator {
         ok: built.failed === 0,
         detail: `${built.done} done, ${built.failed} not completed`,
       });
-      if (built.failed > 0) status = "failed";
+      // A task that did not complete is not on its own a failed run. Closing
+      // the gaps its builders left is the integrator's whole job, and whether
+      // the run delivered is a question about the integration branch, not
+      // about the bookkeeping - see below.
+      if (built.failed > 0) {
+        notes.push(
+          `${built.failed} task(s) did not complete; the integrator was asked to close the gap`,
+        );
+      }
 
       const integrated = await this.runSingle("integrator", this.integrationBrief());
       phases.push({ phase: "integrate", ok: integrated.ok, detail: integrated.detail });
-      if (!integrated.ok) status = "failed";
 
-      if (!this.options.dryRun && status !== "failed") {
+      // Whether the run delivered is a question about the integration branch,
+      // not about the task bookkeeping and not about an agent's own account of
+      // itself. Closing the gaps its builders left is the integrator's whole
+      // job, so tasks that did not complete do not condemn the run - but an
+      // integrator that reports success over an empty branch does, which is
+      // the same standard a task with an empty diff is held to.
+      //
+      // An empty branch is not damning on its own - a run whose every task
+      // legitimately needed no changes has nothing to show and is still a
+      // success. It is damning when work went missing: tasks that did not
+      // complete and nothing on the branch to stand in for them.
+      const tracked = await this.w.workspaces.fileCount();
+      const delivered =
+        integrated.ok && (tracked > BASE_TRACKED_FILES || built.failed === 0);
+      if (!delivered) status = "failed";
+      if (integrated.ok && !delivered) {
+        notes.push(
+          `${built.failed} task(s) did not complete and the integration branch is empty: ` +
+            `nothing was produced for them`,
+        );
+      }
+
+      // Publishing preserves the work; it is not a reward for a tidy run.
+      // Gating it on the task bookkeeping threw away a finished project: two
+      // builders never landed a diff, the integrator implemented greet() and
+      // its tests itself, `npm test` passed 2 of 2 - and because the run had
+      // already latched "failed", none of it was ever pushed and the report
+      // said the build had not reached green when it plainly had.
+      if (!this.options.dryRun && delivered) {
         const outcome = await this.publish();
         phases.push({ phase: "publish", ok: outcome.ok, detail: outcome.detail });
         published = outcome.result;
@@ -277,8 +315,11 @@ export class Orchestrator {
         phases.push({ phase: "ship", ok: true, detail: "skipped (dry run)" });
         notes.push("dry run: no external service was contacted");
       } else if (status === "failed") {
-        phases.push({ phase: "ship", ok: false, detail: "skipped (build did not reach green)" });
-        notes.push("ship was skipped because an earlier phase failed");
+        const reason = delivered
+          ? "skipped (the build was not published)"
+          : "skipped (the build did not reach green)";
+        phases.push({ phase: "ship", ok: false, detail: reason });
+        notes.push(`ship was ${reason}`);
       } else {
         const shipped = await this.runSingle("operator", this.shipBrief(published));
         phases.push({ phase: "ship", ok: shipped.ok, detail: shipped.detail });
@@ -299,7 +340,12 @@ export class Orchestrator {
       log.error(cause === "failure" ? "run failed" : `run stopped (${cause})`, message);
     }
 
-    await this.w.workspaces.cleanup();
+    // Only release the worktrees when there is nothing left to come back for.
+    // A halted or failed run is precisely the one that gets resumed, and
+    // removing the checkouts takes with them whatever a builder had written
+    // but not yet committed - while promising, on the way back in, that the
+    // work is still there.
+    if (status === "succeeded") await this.w.workspaces.cleanup();
 
     const report: RunReport = {
       runId: this.runId,

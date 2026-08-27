@@ -7,7 +7,7 @@ working *on* it.
 ## Commands
 
 ```bash
-npm test                 # 150 tests, ~15s, no network
+npm test                 # 153 tests, ~15s, no network
 npm run typecheck
 npm run demo             # full pipeline against the mock provider, no key needed
 npm run hive -- doctor   # what is configured
@@ -49,6 +49,14 @@ These each exist because the alternative failed in a real run:
   `no_changes_needed`, and that claim goes to review like any other. "Empty"
   means the task's branch matches the integration branch - never "nothing was
   committed this round", which is normal on any retry.
+- **Whether the run delivered is a question about the integration branch**, not
+  about the task bookkeeping and not about an agent's account of itself. Closing
+  the gaps its builders left is the integrator's job, so tasks that did not
+  complete do not condemn a run that has work to show for them - a live run
+  abandoned two tasks, had the integrator implement the lot and pass its tests,
+  then published none of it and reported a build that "did not reach green".
+  An integrator reporting success over an empty branch still fails, unless every
+  task legitimately needed no changes.
 - **A halt or exhausted budget leaves its in-flight tasks recoverable.** Those
   are facts about the run, not judgements on the task. All three stop causes -
   a cap, a provider out of quota, an operator - report as *halted* rather than
@@ -93,6 +101,12 @@ These each exist because the alternative failed in a real run:
   kills the whole process tree, because a shell's orphaned grandchild holds the
   stdout pipe open and `close` then never fires - a run that hangs with no
   error, no report and nothing in the ledger.
+- **Recoverable means the work is still on disk.** `cleanup()` releases the
+  worktrees, so it runs only when a run succeeded: a halted run is precisely the
+  one that gets resumed. And a resumed task re-attaches to its own branch rather
+  than deleting it and branching afresh from HEAD, which is how a halt used to
+  destroy every finished-but-unmerged task while telling its builder, on the way
+  back in, that the work was still in its checkout.
 - **One process per run, enforced by a lock.** Two processes on one run claim
   the same task and spawn builders into the same worktree; the second then
   commits nothing and the task is rejected for "no changes".

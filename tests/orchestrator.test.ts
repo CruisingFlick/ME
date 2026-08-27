@@ -86,8 +86,9 @@ function defaultBuilder(request: CompletionRequest) {
 function scripted(script: {
   builder?: (request: CompletionRequest, seen: number) => ReturnType<typeof reply>;
   reviewer?: (request: CompletionRequest, seen: number) => ReturnType<typeof reply>;
+  integrator?: (request: CompletionRequest, seen: number) => ReturnType<typeof reply>;
 }) {
-  const counts = { builder: 0, reviewer: 0 };
+  const counts = { builder: 0, reviewer: 0, integrator: 0 };
   const provider = new MockProvider((request) => {
     const used = (tool: string) =>
       request.messages.some((turn) =>
@@ -106,6 +107,10 @@ function scripted(script: {
       return used("submit_review")
         ? reply("done")
         : reply("reviewed", [call("submit_review", { verdict: "approve", summary: "fine" })]);
+    }
+
+    if (script.integrator && request.system.includes("ROLE: integrator")) {
+      return script.integrator(request, counts.integrator++);
     }
 
     // integrator and operator
@@ -226,6 +231,44 @@ describe("Orchestrator", () => {
 
     expect(report.tasks[0]?.status).toBe("abandoned");
     expect(report.tasks[0]?.feedback).toContain("no changes");
+  });
+
+  it("does not throw away a build the integrator rescued", async () => {
+    // What this cost in a live run: two builders never landed a diff, so both
+    // tasks were abandoned. The integrator then implemented the whole thing
+    // itself and `npm test` passed 2 of 2 - and the run, having already latched
+    // "failed" on the task bookkeeping, never published a line of it and
+    // reported that the build had not reached green when it plainly had.
+    const { report } = await runWith({
+      // The builder never writes anything, so its task is abandoned.
+      builder: () => reply("done", [call("complete_task", { summary: "finished" })]),
+      // The integrator closes the gap itself, exactly as the live one did.
+      integrator: (_request, seen) =>
+        seen === 0
+          ? reply("closing the gap myself", [
+              call("write_file", {
+                path: "greet.js",
+                content: "export const greet = (n) => `Hello, ${n}!`;\n",
+              }),
+            ])
+          : seen === 1
+            ? reply("committing", [
+                call("run_command", { command: "git add -A && git commit -m 'integrator: greet'" }),
+              ])
+            : reply("green", [call("complete_task", { summary: "implemented greet myself" })]),
+    });
+
+    // The tasks genuinely did not complete, and the report still says so.
+    expect(report.phases.find((p) => p.phase === "execute")?.ok).toBe(false);
+    // But the work exists, so the run is judged by the branch rather than by
+    // the bookkeeping: it is not condemned, and on a live run it would publish.
+    // (This harness is a dry run, so there is no publish phase to inspect.)
+    expect(report.filesTracked).toBeGreaterThan(1);
+    expect(report.status).not.toBe("failed");
+    expect(JSON.stringify(report.notes)).toContain("integrator");
+    expect(report.phases.find((phase) => phase.phase === "ship")?.detail).not.toContain(
+      "did not reach green",
+    );
   });
 
   it("accepts a completion that changed nothing but declared it, after review", async () => {
