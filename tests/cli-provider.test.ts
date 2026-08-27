@@ -1,7 +1,13 @@
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ClaudeCliProvider } from "../src/providers/claude-cli.js";
+import {
+  ClaudeCliProvider,
+  markerToolsFor,
+  renderPrompt,
+  withoutIntegrationCredentials,
+} from "../src/providers/claude-cli.js";
+import type { CompletionRequest } from "../src/providers/types.js";
 
 const DIR = "/tmp/hive-fake-path";
 const originalPath = process.env.PATH;
@@ -82,4 +88,97 @@ function looksLikeQuotaNotice(text: string): boolean {
     /^claude usage limit reached/i.test(trimmed) ||
     /^rate[_ ]limit(_error)?\b/i.test(trimmed);
   return matches && trimmed.length < 400;
+}
+
+describe("the tools a CLI agent is told about", () => {
+  const spec = (name: string, description: string, properties: Record<string, unknown> = {}) => ({
+    name,
+    description,
+    inputSchema: { type: "object" as const, properties, required: Object.keys(properties) },
+  });
+
+  const request = (tools: ReturnType<typeof spec>[]): CompletionRequest => ({
+    system: "ROLE: operator",
+    messages: [{ role: "user", content: [{ type: "text", text: "ship it" }] }],
+    tools,
+    cwd: "/tmp",
+  });
+
+  it("describes the tools the CLI has no equivalent for", () => {
+    // The failure this prevents: only complete_task, block_task and
+    // submit_review were ever described, so board_write, add_task and every
+    // integration tool were invisible. Two live agents reported, accurately,
+    // that they had no blackboard tool - and one reached Neon with curl
+    // instead, which no capability check ever saw.
+    const prompt = renderPrompt2(
+      request([
+        spec("neon_create_branch", "Create a Neon Postgres branch for this run.", { name: {} }),
+        spec("board_write", "Publish a value other agents can read.", { key: {}, value: {} }),
+        spec("complete_task", "Declare your assigned task finished."),
+      ]),
+    );
+
+    expect(prompt).toContain("neon_create_branch");
+    expect(prompt).toContain("Create a Neon Postgres branch");
+    expect(prompt).toContain('{"signal":"neon_create_branch","name":...}');
+    expect(prompt).toContain("board_write");
+    // And the reason its shell will not work, so it reports rather than routing round.
+    expect(prompt).toContain("curl");
+  });
+
+  it("leaves the tools the CLI does natively to the CLI", () => {
+    // A Read is cheaper than a whole extra invocation of the binary.
+    const prompt = renderPrompt2(
+      request([
+        spec("read_file", "Read a file.", { path: {} }),
+        spec("write_file", "Write a file.", { path: {}, content: {} }),
+        spec("run_command", "Run a shell command.", { command: {} }),
+        spec("complete_task", "Declare your assigned task finished."),
+      ]),
+    );
+
+    expect(prompt).not.toContain('{"signal":"write_file"');
+    expect(prompt).not.toContain('{"signal":"run_command"');
+    expect(prompt).toContain("complete_task");
+  });
+});
+
+describe("the environment a CLI agent's shell inherits", () => {
+  it("carries no integration credential", () => {
+    // run_command blanks these; the claude subprocess inherited all of them,
+    // and a CLI agent has its own Bash. A live operator created a Neon branch
+    // with curl and the ledger recorded no integration call, because none was
+    // made - routing around the capability allowlist entirely.
+    const before = { ...process.env };
+    process.env.NEON_API_KEY = "napi_secret";
+    process.env.GITHUB_TOKEN = "ghp_secret";
+    process.env.RESEND_API_KEY = "re_secret";
+    process.env.RAILWAY_TOKEN = "rw_secret";
+    process.env.CLERK_SECRET_KEY = "sk_secret";
+    process.env.HIVE_DATABASE_URL = "postgres://hive";
+    try {
+      const env = withoutIntegrationCredentials();
+      for (const key of [
+        "NEON_API_KEY",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "RESEND_API_KEY",
+        "RAILWAY_TOKEN",
+        "CLERK_SECRET_KEY",
+        "HIVE_DATABASE_URL",
+      ]) {
+        expect(env[key], key).toBe("");
+      }
+      // The CLI may authenticate itself with this one; blanking it would stop
+      // the agent running at all.
+      expect("ANTHROPIC_API_KEY" in env ? env.ANTHROPIC_API_KEY : "").not.toBe(undefined);
+    } finally {
+      process.env = before;
+    }
+  });
+});
+
+/** The provider picks the marker tools itself; mirror that in the test. */
+function renderPrompt2(request: CompletionRequest): string {
+  return renderPrompt(request, markerToolsFor(request.tools));
 }

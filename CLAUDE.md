@@ -7,7 +7,7 @@ working *on* it.
 ## Commands
 
 ```bash
-npm test                 # 153 tests, ~15s, no network
+npm test                 # 156 tests, ~15s, no network
 npm run typecheck
 npm run demo             # full pipeline against the mock provider, no key needed
 npm run hive -- doctor   # what is configured
@@ -111,7 +111,17 @@ These each exist because the alternative failed in a real run:
   the same task and spawn builders into the same worktree; the second then
   commits nothing and the task is rejected for "no changes".
 - **Capabilities are decided before the run.** Nothing grants itself anything
-  mid-run; there is nobody to ask.
+  mid-run; there is nobody to ask. And the allowlist only binds if there is no
+  way round it: a CLI agent has a shell of its own, so the credentials are kept
+  out of that subprocess too. They were not, and an operator created a Neon
+  branch with curl - the ledger recorded no integration call because none was
+  made, and no capability check ever saw it.
+- **A CLI agent is told about every tool it has.** Only the three signal tools
+  were described, so the blackboard, the bus and every integration were
+  invisible to it - `neon_create_branch` has still never run. Two agents
+  reported, accurately, that they had no blackboard tool; one of them then
+  reached for curl. Anything the CLI can do natively stays native, because a
+  Read is cheaper than another invocation of the binary.
 - **The work graph has a ceiling.** `add_task` is how an integrator hands real
   discovered work to a builder instead of half-doing it itself, which is worth
   having - but a graph that grows every round does not converge, and the run

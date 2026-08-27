@@ -71,8 +71,14 @@ export class ClaudeCliProvider implements ModelProvider {
   }
 
   async complete(model: string, request: CompletionRequest): Promise<CompletionResult> {
-    const signalTools = request.tools.filter((tool) => SIGNAL_TOOLS.has(tool.name));
-    const prompt = renderPrompt(request, signalTools);
+    // Anything the CLI can do with its own tools, it should: a Read is cheaper
+    // than a whole extra invocation. Everything else - the blackboard, the bus,
+    // the integrations - has no native equivalent and is offered through the
+    // marker instead. Without this an agent was told only about the three
+    // signal tools, so board_write, add_task and every integration tool were
+    // invisible to it, and two of them said so in their reports.
+    const markerTools = markerToolsFor(request.tools);
+    const prompt = renderPrompt(request, markerTools);
     const allowed = allowedToolsFor(request.tools);
 
     // The prompt goes on stdin, not in argv. A reviewer's prompt carries the
@@ -128,7 +134,7 @@ export class ClaudeCliProvider implements ModelProvider {
     if (limit) throw new ProviderError(limit, this.id, false);
 
     const usage = payload.usage ?? {};
-    const toolCalls = extractSignal(text, signalTools);
+    const toolCalls = extractSignal(text, markerTools);
 
     return {
       text: stripMarker(text),
@@ -199,7 +205,12 @@ function allowedToolsFor(tools: ToolSpec[]): string[] {
  * Turn the swarm's tool-call protocol into something a CLI agent can satisfy:
  * do the work with your own tools, then declare the outcome in one JSON object.
  */
-function renderPrompt(request: CompletionRequest, signalTools: ToolSpec[]): string {
+/** The tools offered through the marker: everything the CLI cannot do natively. */
+export function markerToolsFor(tools: ToolSpec[]): ToolSpec[] {
+  return tools.filter((tool) => !(tool.name in TOOL_MAP));
+}
+
+export function renderPrompt(request: CompletionRequest, markerTools: ToolSpec[]): string {
   const transcript = request.messages
     .map((turn) => {
       const body = turn.content
@@ -216,6 +227,28 @@ function renderPrompt(request: CompletionRequest, signalTools: ToolSpec[]): stri
   // The protocol block goes before the transcript on purpose: the last thing an
   // agent reads should be its actual assignment, not the reporting format.
   const sections: string[] = [request.system];
+
+  const signalTools = markerTools.filter((tool) => SIGNAL_TOOLS.has(tool.name));
+  const swarmTools = markerTools.filter((tool) => !SIGNAL_TOOLS.has(tool.name));
+
+  if (swarmTools.length > 0) {
+    sections.push(
+      [
+        "## Tools that belong to the swarm",
+        "",
+        "These act outside your checkout, so they are not yours to perform directly. To use one,",
+        `end your output with ${MARKER} on its own line followed by one JSON object naming it.`,
+        "You will be called again with the result and can carry on from there.",
+        "",
+        ...swarmTools.map((tool) => `- ${describeTool(tool)}`),
+        "",
+        "Do not reach for these with curl or a shell. Their credentials are deliberately absent",
+        "from your environment, so the attempt fails and the capability the run was granted - or",
+        "withheld - is the one that decides. If you need something here that is not listed, say so",
+        "in your report rather than working around it.",
+      ].join("\n"),
+    );
+  }
 
   if (signalTools.length > 0) {
     const building = signalTools.some((tool) => tool.name === "complete_task");
@@ -248,6 +281,17 @@ function renderPrompt(request: CompletionRequest, signalTools: ToolSpec[]): stri
 
   sections.push(transcript);
   return sections.filter(Boolean).join("\n\n");
+}
+
+/** One line an agent can act on: what the tool is for, and the JSON that calls it. */
+function describeTool(tool: ToolSpec): string {
+  const schema = tool.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
+  const required = new Set(schema.required ?? []);
+  const fields = Object.keys(schema.properties ?? {})
+    .map((key) => `"${key}":${required.has(key) ? "..." : "... (optional)"}`)
+    .join(",");
+  const call = `{"signal":"${tool.name}"${fields ? `,${fields}` : ""}}`;
+  return `${tool.name}: ${tool.description.split("\n")[0]} ${call}`;
 }
 
 function describeSignal(name: string): string {
@@ -289,6 +333,36 @@ function stripMarker(text: string): string {
   return (index === -1 ? text : text.slice(0, index)).trim();
 }
 
+/**
+ * The environment a CLI agent's own shell inherits.
+ *
+ * run_command blanks these before running anything, but the claude subprocess
+ * inherited the lot - and a CLI agent has its own Bash. So an agent could reach
+ * any of these APIs with curl, which is not a hypothetical: a live run's
+ * operator created a Neon branch that way, and the ledger recorded no
+ * integration call at all because none was made. That routes around the
+ * capability allowlist entirely, including the four capabilities withheld by
+ * default - which is the guarantee the whole design rests on.
+ *
+ * ANTHROPIC_API_KEY stays: some installations authenticate the CLI itself with
+ * it, and blanking it would stop the agent running at all.
+ */
+export function withoutIntegrationCredentials(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    OPENAI_API_KEY: "",
+    GEMINI_API_KEY: "",
+    GITHUB_TOKEN: "",
+    GH_TOKEN: "",
+    NEON_API_KEY: "",
+    RAILWAY_TOKEN: "",
+    CLERK_SECRET_KEY: "",
+    RESEND_API_KEY: "",
+    // The hive's own state database is not the built project's database.
+    HIVE_DATABASE_URL: "",
+  };
+}
+
 function run(
   binary: string,
   args: string[],
@@ -311,6 +385,7 @@ function run(
       stdio: ["pipe", "pipe", "pipe"],
       shell: process.platform === "win32",
       ...(cwd ? { cwd } : {}),
+      env: withoutIntegrationCredentials(),
     });
     let stdout = "";
     let stderr = "";
