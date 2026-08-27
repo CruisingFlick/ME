@@ -15,7 +15,7 @@ import { openStore, type Store } from "../kernel/store/index.js";
 import { Workspaces } from "../kernel/workspace.js";
 import { TaskGraph } from "../kernel/tasks.js";
 import { buildIntegrations, integrationStatus, type Integrations } from "../integrations/index.js";
-import { ProviderRegistry } from "../providers/registry.js";
+import { ProviderRegistry, CLI_PROVIDER_IDS } from "../providers/registry.js";
 import { ToolRegistry } from "../tools/registry.js";
 import type { ToolContext } from "../tools/types.js";
 import { ZERO_USAGE, type AgentSpec, type Role, type Task, type Usage } from "../types.js";
@@ -244,6 +244,17 @@ export class Orchestrator {
       } else {
         notes.push(
           `single-vendor run: ${this.builderProvider} both builds and reviews - configure a second provider for independent review`,
+        );
+      }
+
+      const onCli = [this.builderProvider, this.reviewerProvider].filter((id) =>
+        CLI_PROVIDER_IDS.has(id),
+      );
+      if (onCli.length > 0) {
+        notes.push(
+          `spend shown is what these tokens would cost through the API; ` +
+            `${[...new Set(onCli)].join(" and ")} runs on the installed CLI, so a subscription ` +
+            `is charged nothing per run and its own session allowance is the real limit`,
         );
       }
 

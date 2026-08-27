@@ -13,6 +13,22 @@ import type { ModelProvider } from "./types.js";
  * real agents in their own right, so the hive treats them as consultants rather
  * than as gated workers (see CliProvider for why).
  */
+/**
+ * Providers driven by a locally installed CLI rather than by an API key.
+ *
+ * They bill differently, and the run report has to say so: a CLI reports what
+ * the tokens would have cost through the API, but the installation is usually
+ * authenticated by a subscription, where the real limit is a session allowance
+ * on a clock and no money changes hands per run. A spend cap against that
+ * figure guards a charge that is not being made, while the thing that actually
+ * stops the run is invisible to it.
+ */
+export const CLI_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  "claude-code",
+  "codex",
+  "gemini-cli",
+]);
+
 export function buildRegistry(): Map<string, ModelProvider> {
   const providers: ModelProvider[] = [
     new AnthropicProvider(),
