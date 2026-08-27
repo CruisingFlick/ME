@@ -17,11 +17,16 @@ import {
  */
 export class GeminiProvider implements ModelProvider {
   readonly id = "gemini";
+  // `|| `, not `?? `: an override left blank in .env is an empty string, not
+  // undefined, so `??` would pass "" through as the model id and every call
+  // would 404 saying nothing useful. Blanking the line is the obvious thing to
+  // do when an id goes stale, so it has to mean "use the default".
+  //
   // Google retires model ids for new accounts while keeping them alive for
   // existing ones, so a default that works here can 404 for someone setting up
   // today - which is exactly how this failed: "no longer available to new
   // users", against a perfectly good key, twice, before anyone read the message.
-  readonly defaultModel = process.env.GEMINI_MODEL ?? "gemini-3.1-pro-preview";
+  readonly defaultModel = process.env.GEMINI_MODEL?.trim() || "gemini-3.1-pro-preview";
   private readonly base =
     process.env.GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta";
 

@@ -49,7 +49,7 @@ const TOOL_MAP: Record<string, string[]> = {
  */
 export class ClaudeCliProvider implements ModelProvider {
   readonly id = "claude-code";
-  readonly defaultModel = process.env.HIVE_CLAUDE_CLI_MODEL ?? "sonnet";
+  readonly defaultModel = process.env.HIVE_CLAUDE_CLI_MODEL?.trim() || "sonnet";
   private readonly binary = "claude";
 
   available(): boolean {

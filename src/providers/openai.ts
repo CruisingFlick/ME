@@ -19,7 +19,7 @@ import {
  */
 export class OpenAIProvider implements ModelProvider {
   readonly id = "openai";
-  readonly defaultModel = process.env.OPENAI_MODEL ?? "gpt-5";
+  readonly defaultModel = process.env.OPENAI_MODEL?.trim() || "gpt-5";
   private readonly endpoint =
     process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1/chat/completions";
 

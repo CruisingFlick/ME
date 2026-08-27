@@ -182,3 +182,41 @@ describe("the environment a CLI agent's shell inherits", () => {
 function renderPrompt2(request: CompletionRequest): string {
   return renderPrompt(request, markerToolsFor(request.tools));
 }
+
+describe("a model override left blank", () => {
+  const originals = {
+    GEMINI_MODEL: process.env.GEMINI_MODEL,
+    OPENAI_MODEL: process.env.OPENAI_MODEL,
+    HIVE_CLAUDE_CLI_MODEL: process.env.HIVE_CLAUDE_CLI_MODEL,
+  };
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(originals)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("means the default, not an empty model id", async () => {
+    // Blanking the line is the obvious move when a model id goes stale - which
+    // it does: gemini-2.5-pro was retired for new accounts while still working
+    // for existing ones. With `??` the empty string passed straight through as
+    // the model, and every call 404'd saying nothing useful.
+    process.env.GEMINI_MODEL = "";
+    process.env.OPENAI_MODEL = "   ";
+    process.env.HIVE_CLAUDE_CLI_MODEL = "";
+
+    const { GeminiProvider } = await import("../src/providers/gemini.js");
+    const { OpenAIProvider } = await import("../src/providers/openai.js");
+
+    expect(new GeminiProvider().defaultModel).not.toBe("");
+    expect(new OpenAIProvider().defaultModel).toBe("gpt-5");
+    expect(new ClaudeCliProvider().defaultModel).toBe("sonnet");
+  });
+
+  it("still honours a real override", async () => {
+    process.env.OPENAI_MODEL = "gpt-5-mini";
+    const { OpenAIProvider } = await import("../src/providers/openai.js");
+    expect(new OpenAIProvider().defaultModel).toBe("gpt-5-mini");
+  });
+});
