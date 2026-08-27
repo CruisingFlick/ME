@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { check } from "../src/verify.js";
+import { check, exerciseProvider } from "../src/verify.js";
 
 describe("credential checks", () => {
   it("reports an unconfigured service without calling it", async () => {
@@ -78,5 +78,41 @@ describe("telling apart the reasons a check can fail", () => {
     });
 
     expect(result.status).toBe("unreachable");
+  });
+});
+
+describe("driving a model end to end", () => {
+  const usage = { costUsd: 0.0017 };
+
+  it("fails a model that is billed but answers nothing", async () => {
+    // gpt-5 is a reasoning model, and the probe's 64-token ceiling went
+    // entirely to reasoning: 2.4 seconds, $0.0017, no text - reported as ok.
+    // The one thing --deep exists to prove is that the model can be driven, and
+    // in a run an empty answer is worse than a loud failure: a reviewer that
+    // returns no text renders no verdict, and no verdict is request_changes.
+    const silent = {
+      id: "quiet",
+      defaultModel: "m",
+      complete: async () => ({ text: "   ", usage }),
+    };
+
+    await expect(exerciseProvider(silent as never)).rejects.toThrow(/returned no text/);
+  });
+
+  it("gives a reasoning model room to think before it answers", async () => {
+    let ceiling = 0;
+    const reasoner = {
+      id: "thinker",
+      defaultModel: "m",
+      complete: async (_model: string, request: { maxTokens: number }) => {
+        ceiling = request.maxTokens;
+        return { text: "READY", usage };
+      },
+    };
+
+    const summary = await exerciseProvider(reasoner as never);
+    expect(ceiling).toBeGreaterThanOrEqual(1024);
+    expect(summary).toContain("READY");
+    expect(summary).toContain("$0.0017");
   });
 });

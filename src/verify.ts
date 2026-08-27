@@ -64,15 +64,27 @@ export async function exerciseProvider(
     system: "You are a connectivity probe. Answer with one word and nothing else.",
     messages: [{ role: "user", content: [{ type: "text", text: "Reply with the word READY." }] }],
     tools: [],
-    maxTokens: 64,
+    // Room for a reasoning model to think before it answers. At 64 the whole
+    // ceiling went to reasoning tokens on gpt-5: billed, timed, and empty - and
+    // reported as ok, which is the one thing this check exists to catch.
+    maxTokens: 2048,
     effort: "low",
   } as never;
 
   const started = Date.now();
   const result = await provider.complete(model ?? provider.defaultModel, request);
   const elapsed = Date.now() - started;
-  const reply = result.text.trim().slice(0, 40) || "(empty reply)";
   const cost = result.usage.costUsd > 0 ? `, $${result.usage.costUsd.toFixed(4)}` : "";
+  const reply = result.text.trim().slice(0, 40);
+  // An empty answer is a failure, not a pass. A reviewer that returns no text
+  // renders no verdict, and a missing verdict is request_changes - so a
+  // provider that silently answers nothing would never approve any work.
+  if (!reply) {
+    throw new Error(
+      `the model was driven and billed${cost} but returned no text - ` +
+        `it cannot render a verdict or a plan in this state`,
+    );
+  }
   return `answered in ${elapsed}ms${cost}: ${JSON.stringify(reply)}`;
 }
 
