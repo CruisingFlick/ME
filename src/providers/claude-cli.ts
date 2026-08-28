@@ -317,7 +317,12 @@ function extractSignal(text: string, signalTools: ToolSpec[]): ToolCall[] {
   try {
     parsed = parseJsonLoose<Record<string, unknown>>(tail);
   } catch {
-    if (index !== -1) log.warn("marker present but the verdict did not parse");
+    // What it actually emitted, not just that it was wrong. A warning that
+    // names no evidence cannot be acted on, and this is the one place the
+    // agent's own reporting format can fail.
+    if (index !== -1) {
+      log.warn(`marker present but the verdict did not parse: ${truncate(tail.trim(), 300)}`);
+    }
     return [];
   }
 
