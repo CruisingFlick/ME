@@ -5,6 +5,8 @@ import { customers, requestItems, requests, type RequestStatus } from "@/db/sche
 import { requireRep } from "@/lib/rep-session";
 import { STATUS_LABELS } from "@/lib/requests";
 import { StatusBadge } from "@/components/StatusBadge";
+import { PriorityBadge, PRIORITY_RANK } from "@/components/PriorityBadge";
+import { TriageButton } from "./TriageButton";
 
 const FILTERS: { key: string; label: string; statuses: RequestStatus[] }[] = [
   { key: "open", label: "Open", statuses: ["received", "quoted"] },
@@ -38,6 +40,9 @@ export default async function DashboardPage({
       status: requests.status,
       submittedAt: requests.submittedAt,
       customerMessage: requests.customerMessage,
+      triageSummary: requests.triageSummary,
+      triagePriority: requests.triagePriority,
+      triagedAt: requests.triagedAt,
       customerName: customers.name,
       customerId: customers.id,
       itemCount: sql<number>`(
@@ -50,18 +55,32 @@ export default async function DashboardPage({
     .where(and(eq(requests.repId, rep.id), ne(requests.status, "draft")))
     .orderBy(desc(requests.submittedAt));
 
-  const visible = rows.filter((r) => active.statuses.includes(r.status));
+  // Triage sorts the inbox; without it the list stays newest-first as before.
+  const visible = rows
+    .filter((r) => active.statuses.includes(r.status))
+    .sort(
+      (a, b) =>
+        PRIORITY_RANK[a.triagePriority ?? "untriaged"] -
+        PRIORITY_RANK[b.triagePriority ?? "untriaged"],
+    );
+
   const newCount = rows.filter((r) => r.status === "received").length;
+  const untriaged = rows.filter(
+    (r) => r.status === "received" && !r.triagedAt,
+  ).length;
 
   return (
     <main className="shell">
-      <div style={{ padding: "1.25rem 0 0.5rem" }}>
-        <h1>Requests</h1>
-        <p className="muted">
-          {newCount === 0
-            ? "Nothing new waiting on you."
-            : `${newCount} new request${newCount === 1 ? "" : "s"} to work through.`}
-        </p>
+      <div className="row-between" style={{ padding: "1.25rem 0 0.5rem" }}>
+        <div>
+          <h1>Requests</h1>
+          <p className="muted" style={{ marginBottom: 0 }}>
+            {newCount === 0
+              ? "Nothing new waiting on you."
+              : `${newCount} new request${newCount === 1 ? "" : "s"} to work through.`}
+          </p>
+        </div>
+        <TriageButton pending={untriaged} />
       </div>
 
       <div className="row" style={{ marginBottom: "1rem" }}>
@@ -100,12 +119,18 @@ export default async function DashboardPage({
               <div className="grow">
                 <div className="row" style={{ gap: "0.5rem" }}>
                   <StatusBadge status={r.status} />
+                  {r.triagePriority && (
+                    <PriorityBadge priority={r.triagePriority} />
+                  )}
                   <strong>{r.customerName}</strong>
                 </div>
                 <div className="tiny" style={{ marginTop: "0.25rem" }}>
                   {r.itemCount} item{r.itemCount === 1 ? "" : "s"} · sent{" "}
                   {when(r.submittedAt)}
                 </div>
+                {r.triageSummary && (
+                  <p className="triage-summary">{r.triageSummary}</p>
+                )}
                 {r.customerMessage && (
                   <p className="muted" style={{ margin: "0.35rem 0 0" }}>
                     “{r.customerMessage}”

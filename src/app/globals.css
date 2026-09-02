@@ -316,6 +316,32 @@ textarea {
   background: var(--surface-2);
 }
 
+/* ---------- triage ---------- */
+
+.badge-priority-high {
+  background: #fdeaea;
+  color: var(--danger);
+  border-color: #f3c9c7;
+}
+.badge-priority-normal {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.badge-priority-low {
+  background: var(--surface-2);
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.triage-summary {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.65rem;
+  background: var(--surface-2);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
 /* ---------- item cards ---------- */
 
 .item {

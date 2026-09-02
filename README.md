@@ -66,6 +66,7 @@ Vercel under **Settings → Environment Variables**.
 | `DATABASE_URL`          | Yes                 | Neon connection string. Use the **pooled** one from the Neon dashboard. Any standard Postgres URL works too — the app picks Neon's HTTP driver or a normal TCP pool based on the host. |
 | `SESSION_SECRET`        | Yes                 | Signs the rep and customer session cookies. Any random 32+ character string: `openssl rand -base64 32`. Changing it logs everyone out. |
 | `BLOB_READ_WRITE_TOKEN` | Only for photos     | Vercel Blob store token. Vercel injects it automatically once you connect a Blob store to the project. Without it, photo upload returns a friendly "type it in instead" message and everything else works normally. |
+| `ANTHROPIC_API_KEY`     | Only for triage     | From [console.anthropic.com](https://console.anthropic.com). Powers the morning triage button. Without it the button says triage isn't set up; nothing else depends on it. This is the only variable that costs money to use — see [Morning triage](#morning-triage). |
 
 ---
 
@@ -83,7 +84,9 @@ Other scripts:
 ```bash
 npm run db:generate               # new migration after editing src/db/schema.ts
 npm run typecheck
+npm test                          # all tests
 npm run test:scrape               # scraper parsing + fallback tests
+npm run test:triage               # triage reconciliation (incl. the injection case)
 npm run scrape:try -- "<url>"     # try the scraper against a real page
 ```
 
@@ -154,6 +157,49 @@ supply the URL.
 
 ---
 
+## Morning triage
+
+The rep dashboard has a **Run morning triage** button. It takes every request
+still sitting in **Received** that hasn't been triaged, sends them to Claude in
+one batch, and writes back a one-line summary and a priority for each. The
+inbox then sorts highest-priority first, so the ones needing a judgment call —
+an open "Milwaukee or Makita?", a stated deadline, an item described only by a
+photo — surface above the straightforward lists.
+
+It is deliberately manual. A rep taps it when they sit down with a coffee.
+Putting it on a schedule is a small change once the flow has earned its keep.
+
+**Triage never changes a request's status.** Status is what the *customer*
+sees, and "Triaged" would mean nothing to them while hiding the fact that their
+request is still Received. Triage writes to its own columns
+(`triage_summary`, `triage_priority`, `triaged_at`) and the customer never sees
+any of it.
+
+**What gets sent to the API.** Only what's needed to write a useful summary:
+the customer's *name*, the request message, and the line items. Not their email
+or phone, and **never the rep's private notes** — those don't leave the
+database. Worth knowing this is customer data going to a third-party API, and
+worth telling a rep that plainly before they switch it on.
+
+**What it costs.** A batch of 10 overnight requests is roughly 3K input and 600
+output tokens — about **2-3 cents a morning**, call it **$1 a month** for one
+rep. Even a heavy night of 40 requests (the per-run cap) lands under 15 cents.
+It runs only when the button is pressed, and only over requests not already
+triaged, so re-tapping it is free. This is the one part of the app that isn't
+on a free tier.
+
+**Model output is never trusted as a database key.** The prompt contains
+customer-written text, and the model echoes request ids back. Those ids are
+checked against the exact set of rows fetched for that rep before anything is
+written, and the update is scoped by `rep_id` at the database as well. Without
+that, text a customer typed into an item note could steer a write onto someone
+else's request. `npm run test:triage` covers this case directly.
+
+If triage fails for any reason — no API key, API error, a refusal — the inbox
+is left exactly as it was and the rep is told so. Nothing is half-written.
+
+---
+
 ## Known limitations
 
 These are real. Don't let anyone promise otherwise.
@@ -170,6 +216,11 @@ These are real. Don't let anyone promise otherwise.
   tells the customer to type it in instead. It doesn't break anything else.
 - **No store connection, by design.** The rep re-keys quotes into the store's
   system themselves. That's the point of the app, not a missing feature.
+- **Triage quality is unverified against real requests.** The plumbing is
+  tested, but no summary has been generated from a live API call yet — that
+  needs a key and a few real overnight requests. Expect to tune the prompt in
+  `src/lib/triage.ts` once a rep has read a week of its summaries and can say
+  what it over- and under-flags.
 - **The scraper attributes prices to a moment in time.** A scraped price is what
   the page said when it was pasted. It is not a quote, and the app never shows
   it as one.

@@ -12,9 +12,12 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:push": "drizzle-kit push",
     "test:scrape": "tsx src/lib/scrape.test.ts",
-    "scrape:try": "tsx src/lib/scrape-cli.ts"
+    "scrape:try": "tsx src/lib/scrape-cli.ts",
+    "test:triage": "tsx src/lib/triage.test.ts",
+    "test": "npm run test:scrape && npm run test:triage"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
     "@neondatabase/serverless": "^0.10.4",
     "@vercel/blob": "^0.27.0",
     "dotenv": "^17.4.2",
@@ -23,7 +26,8 @@
     "pg": "^8.13.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

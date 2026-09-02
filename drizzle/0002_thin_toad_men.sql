@@ -1,0 +1,1 @@
+ALTER TABLE "requests" ADD CONSTRAINT "requests_triage_priority_check" CHECK ("requests"."triage_priority" is null or "requests"."triage_priority" in ('low', 'normal', 'high'));

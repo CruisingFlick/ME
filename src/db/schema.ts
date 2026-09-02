@@ -6,8 +6,9 @@ import {
   uuid,
   index,
   uniqueIndex,
+  check,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 
 /**
  * Every table below hangs off `rep_id`. That is the portability guarantee:
@@ -88,6 +89,10 @@ export const REQUEST_STATUSES = [
 
 export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 
+export const TRIAGE_PRIORITIES = ["low", "normal", "high"] as const;
+
+export type TriagePriority = (typeof TRIAGE_PRIORITIES)[number];
+
 /**
  * `draft` is the customer's live basket and is never shown to the rep.
  * Submitting flips it to `received`, which is the first rep-visible state.
@@ -107,6 +112,17 @@ export const requests = pgTable(
     customerMessage: text("customer_message"),
     // Rep's reply back to the customer (e.g. "quoted, $1,240 inc GST").
     repMessage: text("rep_message"),
+
+    /*
+     * Morning triage (rep-only). Deliberately NOT part of `status`: status is
+     * the customer-facing workflow, and "Triaged" would mean nothing to a
+     * customer while hiding the fact that their request is still Received.
+     * A triaged request stays `received` until the rep actually quotes it.
+     */
+    triageSummary: text("triage_summary"),
+    triagePriority: text("triage_priority").$type<TriagePriority>(),
+    triagedAt: timestamp("triaged_at", { withTimezone: true }),
+
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -118,6 +134,12 @@ export const requests = pgTable(
   (t) => [
     index("requests_rep_status_idx").on(t.repId, t.status),
     index("requests_customer_idx").on(t.customerId),
+    // triage_priority is derived from model output, so constrain it at the
+    // database too rather than trusting the write path alone.
+    check(
+      "requests_triage_priority_check",
+      sql`${t.triagePriority} is null or ${t.triagePriority} in ('low', 'normal', 'high')`,
+    ),
   ],
 );
 

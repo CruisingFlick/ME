@@ -58,6 +58,12 @@ export default async function RepRequestPage({
         <StatusBadge status={request.status} />
       </div>
 
+      {request.triageSummary && (
+        <div className="notice" style={{ marginBottom: "1rem" }}>
+          <strong>Triage:</strong> {request.triageSummary}
+        </div>
+      )}
+
       <section className="card">
         <h2>Items ({items.length})</h2>
         <ul className="list-reset">

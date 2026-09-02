@@ -8,6 +8,20 @@
       "when": 1786656557662,
       "tag": "0000_burly_goblin_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788386974514,
+      "tag": "0001_nasty_reptil",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788387012602,
+      "tag": "0002_thin_toad_men",
+      "breakpoints": true
     }
   ]
 }
