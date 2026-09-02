@@ -80,7 +80,7 @@ export default async function DashboardPage({
               : `${newCount} new request${newCount === 1 ? "" : "s"} to work through.`}
           </p>
         </div>
-        <TriageButton pending={untriaged} />
+        {rep.triageEnabled && <TriageButton pending={untriaged} />}
       </div>
 
       <div className="row" style={{ marginBottom: "1rem" }}>

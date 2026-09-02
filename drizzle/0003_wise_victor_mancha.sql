@@ -1,0 +1,1 @@
+ALTER TABLE "reps" ADD COLUMN "triage_enabled" boolean DEFAULT false NOT NULL;

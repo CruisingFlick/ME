@@ -110,6 +110,40 @@ Both free tiers cover a single rep comfortably. Nothing here runs on Railway.
 
 ---
 
+## Tenant isolation
+
+Every rep-facing read and write carries `rep_id` in its predicate, and rep-only
+data has no customer-side read path at all. Four end-to-end tests hold this
+down: a second rep gets a 404 on a direct URL to another rep's request and empty
+customer lists; a private note never appears in any customer-facing page or raw
+response; and switching the triage add-on on for one rep leaves every other rep
+refused.
+
+That is application-level enforcement. Before selling this widely, three things
+are worth doing — none of them are bugs today, but each is a way a future change
+could become one:
+
+1. **Postgres row-level security.** Today one forgotten `.where` in a new
+   feature is a cross-tenant leak. RLS makes the database refuse it regardless
+   of what the query says. Neon supports it. This is the highest-value hardening
+   step and the one worth doing first.
+2. **Session tokens should carry an expiry.** The signed cookie payload is
+   currently just the rep's id — `maxAge` is a browser hint the server never
+   checks, so a copied cookie value stays valid indefinitely and there is no way
+   to revoke one. Put an issued-at and an expiry inside the signed payload, and
+   add a token version on the rep row so "log out everywhere" and a password
+   change can invalidate old sessions.
+3. **Rate limiting.** Anyone can identify themselves on any public invite link
+   and then call `/api/scrape`, which fetches arbitrary URLs server-side. It
+   refuses private address ranges, but there is no per-session or per-IP limit,
+   so it can be used as a fetch proxy and to run up serverless cost.
+
+Also worth knowing: photos in Vercel Blob are stored at public (unguessable)
+URLs. Anyone holding a URL can open it without authenticating — fine for product
+photos, worth saying out loud before a customer photographs something sensitive.
+
+---
+
 ## Data model
 
 Everything hangs off `rep_id`. That's the portability guarantee — a rep's entire
@@ -168,6 +202,27 @@ photo — surface above the straightforward lists.
 
 It is deliberately manual. A rep taps it when they sit down with a coffee.
 Putting it on a schedule is a small change once the flow has earned its keep.
+
+### Selling it as a paid add-on
+
+Triage is **off for every rep by default**. When a rep asks for it and agrees to
+pay, switch it on for that one account:
+
+```bash
+npm run rep:addon -- dave@example.com on     # switch on
+npm run rep:addon -- dave@example.com off    # switch off
+npm run rep:addon                            # list every rep and their state
+```
+
+The flag lives on the rep row (`reps.triage_enabled`), so it is per-account like
+everything else. A rep without it never sees the button, **and** the route
+returns `402` if they call it directly — the UI hiding it is presentation, the
+route check is the part that can't be bypassed. Switching one rep on has no
+effect on any other; that's covered by an end-to-end test.
+
+There is no self-serve billing here. Payment is a conversation, then a command.
+That's the right shape while the customer count is small; wire it to Stripe when
+signing reps up is something you want to happen without you.
 
 **Triage never changes a request's status.** Status is what the *customer*
 sees, and "Triaged" would mean nothing to them while hiding the fact that their

@@ -23,6 +23,18 @@ export async function POST() {
     return NextResponse.json({ error: "Not signed in." }, { status: 401 });
   }
 
+  // Paid add-on, per rep. Checked here and not only in the UI — hiding the
+  // button is presentation; this is the part that actually can't be bypassed.
+  if (!rep.triageEnabled) {
+    return NextResponse.json(
+      {
+        error:
+          "Morning triage isn't switched on for this account. Talk to us and we'll turn it on.",
+      },
+      { status: 402 },
+    );
+  }
+
   // Scoped to this rep, and only what hasn't been triaged yet — re-running
   // costs nothing and doesn't re-summarise what's already done.
   const rows = await db

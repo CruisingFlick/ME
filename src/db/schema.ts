@@ -6,6 +6,7 @@ import {
   uuid,
   index,
   uniqueIndex,
+  boolean,
   check,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
@@ -25,6 +26,12 @@ export const reps = pgTable(
     businessName: text("business_name").notNull(),
     // Public handle used in the customer invite link: /r/{slug}
     slug: text("slug").notNull(),
+    /*
+     * Paid add-on switch, per rep. Off for everyone by default: a rep who
+     * hasn't bought morning triage is never shown it and can never invoke it.
+     * Flip it with `npm run rep:addon -- <email> on`.
+     */
+    triageEnabled: boolean("triage_enabled").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
