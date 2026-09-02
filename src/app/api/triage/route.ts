@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { and, eq, isNull } from "drizzle-orm";
-import { db } from "@/db";
+import { asRep } from "@/db/scoped";
 import { customers, requestItems, requests } from "@/db/schema";
 import { getRep } from "@/lib/rep-session";
 import {
@@ -8,6 +8,7 @@ import {
   TriageNotConfiguredError,
   type TriageInput,
 } from "@/lib/triage";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,9 +36,21 @@ export async function POST() {
     );
   }
 
+  // Each run costs money at the API, so cap how often one rep can fire it.
+  const gate = await rateLimit("triage", rep.id);
+  if (!gate.ok) {
+    return NextResponse.json(
+      {
+        error: `Triage has run several times already this hour. Try again in ${Math.ceil(gate.retryAfter / 60)} minutes.`,
+      },
+      { status: 429, headers: { "retry-after": String(gate.retryAfter) } },
+    );
+  }
+
   // Scoped to this rep, and only what hasn't been triaged yet — re-running
   // costs nothing and doesn't re-summarise what's already done.
-  const rows = await db
+  const rows = await asRep(rep.id, (tx) =>
+    tx
     .select({ request: requests, customerName: customers.name })
     .from(requests)
     .innerJoin(customers, eq(requests.customerId, customers.id))
@@ -48,21 +61,24 @@ export async function POST() {
         isNull(requests.triagedAt),
       ),
     )
-    .orderBy(requests.submittedAt)
-    .limit(MAX_PER_RUN);
+      .orderBy(requests.submittedAt)
+      .limit(MAX_PER_RUN),
+  );
 
   if (rows.length === 0) return NextResponse.json({ triaged: 0 });
 
-  const inputs: TriageInput[] = await Promise.all(
-    rows.map(async ({ request, customerName }) => ({
-      ...request,
-      customer: { id: request.customerId, name: customerName },
-      items: await db
-        .select()
-        .from(requestItems)
-        .where(eq(requestItems.requestId, request.id))
-        .orderBy(requestItems.createdAt),
-    })),
+  const inputs: TriageInput[] = await asRep(rep.id, (tx) =>
+    Promise.all(
+      rows.map(async ({ request, customerName }) => ({
+        ...request,
+        customer: { id: request.customerId, name: customerName },
+        items: await tx
+          .select()
+          .from(requestItems)
+          .where(eq(requestItems.requestId, request.id))
+          .orderBy(requestItems.createdAt),
+      })),
+    ),
   );
 
   let verdicts;
@@ -89,9 +105,10 @@ export async function POST() {
   }
 
   const now = new Date();
-  await Promise.all(
-    verdicts.map((v) =>
-      db
+  await asRep(rep.id, (tx) =>
+    Promise.all(
+      verdicts.map((v) =>
+        tx
         .update(requests)
         .set({
           triageSummary: v.summary,
@@ -101,6 +118,7 @@ export async function POST() {
         // rep_id in the predicate as well as the id: the write is constrained
         // to this rep's rows at the database, not just by the earlier select.
         .where(and(eq(requests.id, v.requestId), eq(requests.repId, rep.id))),
+      ),
     ),
   );
 

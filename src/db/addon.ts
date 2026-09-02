@@ -13,7 +13,7 @@
 import "dotenv/config";
 import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { reps } from "./schema";
 
 async function main() {
@@ -26,17 +26,28 @@ async function main() {
   });
   const db = drizzle(pool, { schema: { reps } });
 
+  // Row-level security is FORCEd, so even the table owner is subject to it.
+  // This CLI is an administrative tool with no user identity, so it runs each
+  // statement in an admin-context transaction.
+  const admin = <T,>(fn: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<T>) =>
+    db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.admin', 'on', true)`);
+      return fn(tx);
+    });
+
   const [email, state] = process.argv.slice(2);
 
   if (!email) {
-    const all = await db
+    const all = await admin((tx) =>
+      tx
       .select({
         email: reps.email,
         business: reps.businessName,
         triage: reps.triageEnabled,
       })
       .from(reps)
-      .orderBy(reps.createdAt);
+      .orderBy(reps.createdAt),
+    );
 
     if (all.length === 0) {
       console.log("\nNo reps yet.\n");
@@ -59,11 +70,13 @@ async function main() {
     process.exit(1);
   }
 
-  const [updated] = await db
-    .update(reps)
-    .set({ triageEnabled: state === "on" })
-    .where(eq(reps.email, email.toLowerCase()))
-    .returning({ email: reps.email, triage: reps.triageEnabled });
+  const [updated] = await admin((tx) =>
+    tx
+      .update(reps)
+      .set({ triageEnabled: state === "on" })
+      .where(eq(reps.email, email.toLowerCase()))
+      .returning({ email: reps.email, triage: reps.triageEnabled }),
+  );
 
   if (!updated) {
     console.error(`No rep with the email ${email}.`);

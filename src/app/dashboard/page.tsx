@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { and, desc, eq, ne, sql } from "drizzle-orm";
-import { db } from "@/db";
+import { asRep } from "@/db/scoped";
 import { customers, requestItems, requests, type RequestStatus } from "@/db/schema";
 import { requireRep } from "@/lib/rep-session";
 import { STATUS_LABELS } from "@/lib/requests";
@@ -34,7 +34,8 @@ export default async function DashboardPage({
   const active = FILTERS.find((f) => f.key === filter) ?? FILTERS[0];
 
   // Drafts are the customer's private basket and never surface here.
-  const rows = await db
+  const rows = await asRep(rep.id, (tx) =>
+    tx
     .select({
       id: requests.id,
       status: requests.status,
@@ -52,8 +53,9 @@ export default async function DashboardPage({
     })
     .from(requests)
     .innerJoin(customers, eq(requests.customerId, customers.id))
-    .where(and(eq(requests.repId, rep.id), ne(requests.status, "draft")))
-    .orderBy(desc(requests.submittedAt));
+      .where(and(eq(requests.repId, rep.id), ne(requests.status, "draft")))
+      .orderBy(desc(requests.submittedAt)),
+  );
 
   // Triage sorts the inbox; without it the list stays newest-first as before.
   const visible = rows

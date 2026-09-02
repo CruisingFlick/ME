@@ -1,5 +1,5 @@
 import { and, asc, eq, ne } from "drizzle-orm";
-import { db } from "@/db";
+import { asRep } from "@/db/scoped";
 import { customerNotes, customers, requestItems, requests } from "@/db/schema";
 import { getRep } from "@/lib/rep-session";
 
@@ -27,19 +27,22 @@ export async function GET() {
   const rep = await getRep();
   if (!rep) return new Response("Not signed in.", { status: 401 });
 
-  const custRows = await db
+  const { custRows, noteRows, reqRows, itemRows } = await asRep(
+    rep.id,
+    async (tx) => {
+  const custRows = await tx
     .select()
     .from(customers)
     .where(eq(customers.repId, rep.id))
     .orderBy(asc(customers.createdAt));
 
-  const noteRows = await db
+  const noteRows = await tx
     .select()
     .from(customerNotes)
     .where(eq(customerNotes.repId, rep.id))
     .orderBy(asc(customerNotes.createdAt));
 
-  const reqRows = await db
+  const reqRows = await tx
     .select({
       request: requests,
       customerName: customers.name,
@@ -50,12 +53,16 @@ export async function GET() {
     .where(and(eq(requests.repId, rep.id), ne(requests.status, "draft")))
     .orderBy(asc(requests.submittedAt));
 
-  const itemRows = await db
+  const itemRows = await tx
     .select({ item: requestItems, requestId: requests.id })
     .from(requestItems)
     .innerJoin(requests, eq(requestItems.requestId, requests.id))
     .where(and(eq(requests.repId, rep.id), ne(requests.status, "draft")))
     .orderBy(asc(requestItems.createdAt));
+
+      return { custRows, noteRows, reqRows, itemRows };
+    },
+  );
 
   const sections = [
     "CUSTOMERS",

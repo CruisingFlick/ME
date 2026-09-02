@@ -2,9 +2,9 @@ import "server-only";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
-import { db } from "@/db";
+import { asCustomer } from "@/db/scoped";
 import { customers, reps, type Customer, type Rep } from "@/db/schema";
-import { sign, unsign } from "./crypto";
+import { signSession, verifySession } from "./crypto";
 
 const COOKIE = "customer_session";
 const MAX_AGE = 60 * 60 * 24 * 365; // a year — guardrail #3, customers should not re-identify
@@ -21,7 +21,7 @@ export type CustomerContext = {
 
 export async function startCustomerSession(customerId: string) {
   const jar = await cookies();
-  jar.set(COOKIE, sign(customerId), {
+  jar.set(COOKIE, signSession(customerId, MAX_AGE), {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
@@ -35,10 +35,12 @@ export async function endCustomerSession() {
 }
 
 export async function getCustomerContext(): Promise<CustomerContext | null> {
-  const customerId = unsign((await cookies()).get(COOKIE)?.value);
-  if (!customerId) return null;
+  const session = verifySession((await cookies()).get(COOKIE)?.value);
+  if (!session) return null;
+  const customerId = session.sub;
 
-  const [row] = await db
+  const [row] = await asCustomer(customerId, (tx) =>
+    tx
     .select({
       customer: customers,
       repId: reps.id,
@@ -48,8 +50,9 @@ export async function getCustomerContext(): Promise<CustomerContext | null> {
     })
     .from(customers)
     .innerJoin(reps, eq(customers.repId, reps.id))
-    .where(eq(customers.id, customerId))
-    .limit(1);
+      .where(eq(customers.id, customerId))
+      .limit(1),
+  );
 
   if (!row) return null;
 

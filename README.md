@@ -50,6 +50,7 @@ to the rep account, and it travels with them.
 | Photos   | Vercel Blob                               |
 | Hosting  | Vercel (free tier)                        |
 | Auth     | scrypt + HMAC-signed cookies, no extra deps|
+| Isolation| Postgres row-level security, fail-closed  |
 
 No CSS framework and no auth library — the surface is small enough that neither
 earns its keep, and both are one more thing to keep current.
@@ -63,7 +64,7 @@ Vercel under **Settings → Environment Variables**.
 
 | Variable                | Required            | What it's for |
 | ----------------------- | ------------------- | ------------- |
-| `DATABASE_URL`          | Yes                 | Neon connection string. Use the **pooled** one from the Neon dashboard. Any standard Postgres URL works too — the app picks Neon's HTTP driver or a normal TCP pool based on the host. |
+| `DATABASE_URL`          | Yes                 | Neon connection string — use the **pooled** one (host contains `-pooler`). Any standard Postgres URL works. The role must not be a superuser and must not have `BYPASSRLS`, or row-level security is bypassed; Neon's default role is correct as-is. |
 | `SESSION_SECRET`        | Yes                 | Signs the rep and customer session cookies. Any random 32+ character string: `openssl rand -base64 32`. Changing it logs everyone out. |
 | `BLOB_READ_WRITE_TOKEN` | Only for photos     | Vercel Blob store token. Vercel injects it automatically once you connect a Blob store to the project. Without it, photo upload returns a friendly "type it in instead" message and everything else works normally. |
 | `ANTHROPIC_API_KEY`     | Only for triage     | From [console.anthropic.com](https://console.anthropic.com). Powers the morning triage button. Without it the button says triage isn't set up; nothing else depends on it. This is the only variable that costs money to use — see [Morning triage](#morning-triage). |
@@ -87,6 +88,7 @@ npm run typecheck
 npm test                          # all tests
 npm run test:scrape               # scraper parsing + fallback tests
 npm run test:triage               # triage reconciliation (incl. the injection case)
+npm run test:session              # session token expiry, tampering, revocation
 npm run scrape:try -- "<url>"     # try the scraper against a real page
 ```
 
@@ -112,35 +114,86 @@ Both free tiers cover a single rep comfortably. Nothing here runs on Railway.
 
 ## Tenant isolation
 
-Every rep-facing read and write carries `rep_id` in its predicate, and rep-only
-data has no customer-side read path at all. Four end-to-end tests hold this
-down: a second rep gets a 404 on a direct URL to another rep's request and empty
-customer lists; a private note never appears in any customer-facing page or raw
-response; and switching the triage add-on on for one rep leaves every other rep
-refused.
+This is the part that has to hold if the app is sold to more than one rep.
 
-That is application-level enforcement. Before selling this widely, three things
-are worth doing — none of them are bugs today, but each is a way a future change
-could become one:
+### Row-level security
 
-1. **Postgres row-level security.** Today one forgotten `.where` in a new
-   feature is a cross-tenant leak. RLS makes the database refuse it regardless
-   of what the query says. Neon supports it. This is the highest-value hardening
-   step and the one worth doing first.
-2. **Session tokens should carry an expiry.** The signed cookie payload is
-   currently just the rep's id — `maxAge` is a browser hint the server never
-   checks, so a copied cookie value stays valid indefinitely and there is no way
-   to revoke one. Put an issued-at and an expiry inside the signed payload, and
-   add a token version on the rep row so "log out everywhere" and a password
-   change can invalidate old sessions.
-3. **Rate limiting.** Anyone can identify themselves on any public invite link
-   and then call `/api/scrape`, which fetches arbitrary URLs server-side. It
-   refuses private address ranges, but there is no per-session or per-IP limit,
-   so it can be used as a fetch proxy and to run up serverless cost.
+Every tenant table has an RLS policy, and they are `FORCE`d so the table owner
+is subject to them too. Access is decided from a per-transaction setting that
+`src/db/scoped.ts` puts in place:
 
-Also worth knowing: photos in Vercel Blob are stored at public (unguessable)
-URLs. Anyone holding a URL can open it without authenticating — fine for product
-photos, worth saying out loud before a customer photographs something sensitive.
+```ts
+await asRep(rep.id, (tx) => tx.select().from(customers));      // that rep's book
+await asCustomer(customer.id, (tx) => /* ... */);              // that customer only
+```
+
+The property worth having is what happens when someone **forgets**. A query
+that runs without a scope doesn't leak another rep's rows — it returns nothing
+at all, because the policies compare against a setting that is NULL. Isolation
+stops depending on every future author remembering a `where` clause.
+
+`customer_notes` has no customer clause in its policy whatsoever. The rep's
+private notes are unreadable in a customer context even if some future query
+asks for them directly.
+
+> **The database role must not be a superuser, and must not have `BYPASSRLS`.**
+> Superusers ignore row-level security completely — policies become decoration.
+> Neon's default role is a non-superuser table owner, which is exactly the shape
+> these policies are written for (hence `FORCE`). If you ever move to another
+> host, check this first: `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE
+> rolname = current_user;` must return `f | f`.
+
+Because RLS needs per-transaction session state, the app connects with a pooled
+TCP connection rather than Neon's HTTP driver — the HTTP driver sends each
+statement independently, so the setting would be gone by the time the query ran.
+Use Neon's **pooled** connection string.
+
+### Sessions
+
+The signed cookie payload carries an expiry and a session version, both inside
+the signature:
+
+- The server checks `exp` on every request. `maxAge` on a cookie is only a hint
+  to the browser, so without this a copied cookie value would be valid forever.
+- `reps.session_version` is compared against the version in the token. Bumping
+  it invalidates every outstanding cookie for that account at once — that's what
+  **Sign out everywhere** on the invite-link page does. Wire a password-change
+  flow to bump it too, when you add one.
+
+### Rate limiting
+
+A fixed-window limiter counted in Postgres (`rate_limits`), not in memory —
+serverless instances share no memory, so a per-instance counter caps nothing.
+
+| Action | Limit | Keyed on |
+| ------ | ----- | -------- |
+| Scraping a URL | 30 / 5 min | customer |
+| Photo upload | 20 / 5 min | customer |
+| Morning triage | 6 / hour | rep |
+| Rep login | 10 / 15 min | IP |
+| Customer identify | 15 / hour | IP |
+
+It **fails open**: if the limiter itself errors the request proceeds. That is
+the right trade for abuse protection and the wrong one for authorisation, which
+is why nothing about access control depends on it.
+
+### What is covered by tests
+
+Thirty-four end-to-end checks run against a real Postgres with RLS active and
+the app on a non-superuser role, plus unit tests for the session tokens and the
+triage reconciliation. Among them: a second rep gets a 404 and empty lists; a
+private note appears in no customer-facing page or raw response; the triage
+add-on switch doesn't cross accounts; the scraper limit blocks a flood and one
+customer's limit doesn't affect another.
+
+### Still worth knowing
+
+- Photos in Vercel Blob sit at public (unguessable) URLs — anyone holding a URL
+  can open it without authenticating.
+- Invite slugs are enumerable by design; they are meant to be shared. They
+  expose a rep's business name, nothing more.
+- There is no password-reset flow yet. When you add one, bump
+  `session_version` as part of it.
 
 ---
 

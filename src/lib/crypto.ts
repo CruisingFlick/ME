@@ -26,35 +26,87 @@ export function verifyPassword(password: string, stored: string): boolean {
   return timingSafeEqual(derived, expectedBuf);
 }
 
+function mac(payload: string): string {
+  return createHmac("sha256", secret()).update(payload).digest("base64url");
+}
+
 /**
  * Sessions are a signed payload rather than a DB row: there is no session table
  * to garbage-collect, and it survives serverless cold starts for free.
+ *
+ * The payload carries its own expiry and a version number, both inside the
+ * signature. `maxAge` on the cookie is only a hint to the browser — a copied
+ * cookie value would otherwise be valid forever, with no way to revoke it. The
+ * server checks `exp` on every request, and compares `v` against the account's
+ * current session version so a password change or a "log out everywhere" can
+ * invalidate outstanding cookies.
  */
-export function sign(payload: string): string {
-  const mac = createHmac("sha256", secret()).update(payload).digest("base64url");
-  return `${Buffer.from(payload).toString("base64url")}.${mac}`;
+export type SessionToken = {
+  /** Subject — the rep or customer id. */
+  sub: string;
+  /** Expiry, seconds since the epoch. */
+  exp: number;
+  /** Session version this token was issued under. */
+  v: number;
+};
+
+export function signSession(sub: string, ttlSeconds: number, version = 1): string {
+  const payload: SessionToken = {
+    sub,
+    exp: Math.floor(Date.now() / 1000) + ttlSeconds,
+    v: version,
+  };
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${body}.${mac(JSON.stringify(payload))}`;
 }
 
-export function unsign(token: string | undefined): string | null {
+/**
+ * Verifies the signature and the expiry. Returns null for anything that fails —
+ * a tampered token, an unparseable one, or one that has simply run out.
+ * Checking the version is the caller's job, since it needs the account row.
+ */
+export function verifySession(token: string | undefined): SessionToken | null {
   if (!token) return null;
-  const [body, mac] = token.split(".");
-  if (!body || !mac) return null;
 
-  let payload: string;
+  const [body, signature] = token.split(".");
+  if (!body || !signature) return null;
+
+  let raw: string;
   try {
-    payload = Buffer.from(body, "base64url").toString();
+    raw = Buffer.from(body, "base64url").toString();
   } catch {
     return null;
   }
 
-  const expected = createHmac("sha256", secret())
-    .update(payload)
-    .digest("base64url");
-  const a = Buffer.from(mac);
+  const expected = mac(raw);
+  const a = Buffer.from(signature);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
 
-  return payload;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    typeof (parsed as SessionToken).sub !== "string" ||
+    typeof (parsed as SessionToken).exp !== "number" ||
+    typeof (parsed as SessionToken).v !== "number"
+  ) {
+    return null;
+  }
+
+  const session = parsed as SessionToken;
+
+  // The whole point: an old cookie is refused by the server, not just dropped
+  // by a cooperative browser.
+  if (session.exp <= Math.floor(Date.now() / 1000)) return null;
+
+  return session;
 }
 
 export function slugify(input: string): string {

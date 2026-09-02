@@ -1,5 +1,6 @@
 import { requireCustomer } from "@/lib/customer-session";
-import { getDraftItems, getOrCreateDraft } from "@/lib/requests";
+import { asCustomer } from "@/db/scoped";
+import { getRequestItems, getOrCreateDraft } from "@/lib/requests";
 import { AddItemPanel } from "./AddItemPanel";
 import { DraftList } from "./DraftList";
 import { SubmitPanel } from "./SubmitPanel";
@@ -19,8 +20,10 @@ export default async function ShopPage({
   const { customer, rep } = await requireCustomer();
   const sp = await searchParams;
 
-  const draft = await getOrCreateDraft(rep.id, customer.id);
-  const items = await getDraftItems(draft.id);
+  const items = await asCustomer(customer.id, async (tx) => {
+    const draft = await getOrCreateDraft(tx, rep.id, customer.id);
+    return getRequestItems(tx, draft.id);
+  });
 
   return (
     <main className="shell shell-narrow">

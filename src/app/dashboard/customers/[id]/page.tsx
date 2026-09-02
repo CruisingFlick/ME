@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, desc, eq, ne } from "drizzle-orm";
-import { db } from "@/db";
+import { asRep } from "@/db/scoped";
 import { customerNotes, customers, requests } from "@/db/schema";
 import { requireRep } from "@/lib/rep-session";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -21,24 +21,33 @@ export default async function CustomerPage({
   const rep = await requireRep();
   const { id } = await params;
 
-  const [customer] = await db
-    .select()
-    .from(customers)
-    .where(and(eq(customers.id, id), eq(customers.repId, rep.id)))
-    .limit(1);
-  if (!customer) notFound();
+  const found = await asRep(rep.id, async (tx) => {
+    const [customer] = await tx
+      .select()
+      .from(customers)
+      .where(and(eq(customers.id, id), eq(customers.repId, rep.id)))
+      .limit(1);
+    if (!customer) return null;
 
-  const history = await db
-    .select()
-    .from(requests)
-    .where(and(eq(requests.customerId, customer.id), ne(requests.status, "draft")))
-    .orderBy(desc(requests.submittedAt));
+    const history = await tx
+      .select()
+      .from(requests)
+      .where(
+        and(eq(requests.customerId, customer.id), ne(requests.status, "draft")),
+      )
+      .orderBy(desc(requests.submittedAt));
 
-  const notes = await db
-    .select()
-    .from(customerNotes)
-    .where(eq(customerNotes.customerId, customer.id))
-    .orderBy(desc(customerNotes.createdAt));
+    const notes = await tx
+      .select()
+      .from(customerNotes)
+      .where(eq(customerNotes.customerId, customer.id))
+      .orderBy(desc(customerNotes.createdAt));
+
+    return { customer, history, notes };
+  });
+
+  if (!found) notFound();
+  const { customer, history, notes } = found;
 
   return (
     <main className="shell">

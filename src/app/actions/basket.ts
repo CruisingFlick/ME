@@ -3,8 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { and, eq, inArray } from "drizzle-orm";
-import { db } from "@/db";
 import { favourites, requestItems, requests } from "@/db/schema";
+import { asCustomer, type Tx } from "@/db/scoped";
 import { requireCustomer } from "@/lib/customer-session";
 import { getOrCreateDraft } from "@/lib/requests";
 
@@ -32,7 +32,6 @@ function cleanUrl(raw: string): string | null {
  */
 export async function addItem(data: FormData) {
   const { customer, rep } = await requireCustomer();
-  const draft = await getOrCreateDraft(rep.id, customer.id);
 
   const title = String(data.get("title") ?? "").trim();
   const sourceUrl = cleanUrl(String(data.get("sourceUrl") ?? ""));
@@ -47,44 +46,51 @@ export async function addItem(data: FormData) {
     title || (sourceUrl ? "Item from link" : imageUrl ? "Item from photo" : "");
   if (!finalTitle) return;
 
-  await db.insert(requestItems).values({
-    requestId: draft.id,
-    title: finalTitle.slice(0, 500),
-    sourceUrl,
-    imageUrl,
-    price: price ? price.slice(0, 120) : null,
-    quantity: clampQty(data.get("quantity")),
-    customerNote: note,
-  });
+  await asCustomer(customer.id, async (tx) => {
+    const draft = await getOrCreateDraft(tx, rep.id, customer.id);
 
-  await db
-    .update(requests)
-    .set({ updatedAt: new Date() })
-    .where(eq(requests.id, draft.id));
+    await tx.insert(requestItems).values({
+      requestId: draft.id,
+      title: finalTitle.slice(0, 500),
+      sourceUrl,
+      imageUrl,
+      price: price ? price.slice(0, 120) : null,
+      quantity: clampQty(data.get("quantity")),
+      customerNote: note,
+    });
+
+    await tx
+      .update(requests)
+      .set({ updatedAt: new Date() })
+      .where(eq(requests.id, draft.id));
+  });
 
   revalidatePath("/shop");
 }
 
-async function assertOwnsItem(itemId: string, customerId: string) {
-  const [row] = await db
+/** Only a draft is editable — once it's sent, it's the rep's to work from. */
+async function ownedDraftItem(tx: Tx, itemId: string, customerId: string) {
+  const [row] = await tx
     .select({ id: requestItems.id, status: requests.status })
     .from(requestItems)
     .innerJoin(requests, eq(requestItems.requestId, requests.id))
     .where(and(eq(requestItems.id, itemId), eq(requests.customerId, customerId)))
     .limit(1);
-  // Only a draft is editable — once it's sent, it's the rep's to work from.
   return row && row.status === "draft" ? row : null;
 }
 
 export async function updateItemQuantity(data: FormData) {
   const { customer } = await requireCustomer();
   const id = String(data.get("itemId") ?? "");
-  if (!(await assertOwnsItem(id, customer.id))) return;
+  const quantity = clampQty(data.get("quantity"));
 
-  await db
-    .update(requestItems)
-    .set({ quantity: clampQty(data.get("quantity")) })
-    .where(eq(requestItems.id, id));
+  await asCustomer(customer.id, async (tx) => {
+    if (!(await ownedDraftItem(tx, id, customer.id))) return;
+    await tx
+      .update(requestItems)
+      .set({ quantity })
+      .where(eq(requestItems.id, id));
+  });
 
   revalidatePath("/shop");
 }
@@ -92,38 +98,47 @@ export async function updateItemQuantity(data: FormData) {
 export async function removeItem(data: FormData) {
   const { customer } = await requireCustomer();
   const id = String(data.get("itemId") ?? "");
-  if (!(await assertOwnsItem(id, customer.id))) return;
 
-  await db.delete(requestItems).where(eq(requestItems.id, id));
+  await asCustomer(customer.id, async (tx) => {
+    if (!(await ownedDraftItem(tx, id, customer.id))) return;
+    await tx.delete(requestItems).where(eq(requestItems.id, id));
+  });
+
   revalidatePath("/shop");
 }
 
 export async function submitRequest(data: FormData) {
   const { customer, rep } = await requireCustomer();
-  const draft = await getOrCreateDraft(rep.id, customer.id);
-
-  const items = await db
-    .select({ id: requestItems.id })
-    .from(requestItems)
-    .where(eq(requestItems.requestId, draft.id));
-  if (items.length === 0) return;
-
   const message = String(data.get("customerMessage") ?? "").trim() || null;
-  const now = new Date();
 
-  await db
-    .update(requests)
-    .set({
-      status: "received",
-      customerMessage: message,
-      submittedAt: now,
-      updatedAt: now,
-    })
-    .where(and(eq(requests.id, draft.id), eq(requests.status, "draft")));
+  const draftId = await asCustomer(customer.id, async (tx) => {
+    const draft = await getOrCreateDraft(tx, rep.id, customer.id);
+
+    const items = await tx
+      .select({ id: requestItems.id })
+      .from(requestItems)
+      .where(eq(requestItems.requestId, draft.id));
+    if (items.length === 0) return null;
+
+    const now = new Date();
+    await tx
+      .update(requests)
+      .set({
+        status: "received",
+        customerMessage: message,
+        submittedAt: now,
+        updatedAt: now,
+      })
+      .where(and(eq(requests.id, draft.id), eq(requests.status, "draft")));
+
+    return draft.id;
+  });
+
+  if (!draftId) return;
 
   revalidatePath("/shop");
   revalidatePath("/shop/requests");
-  redirect(`/shop/requests?sent=${draft.id}`);
+  redirect(`/shop/requests?sent=${draftId}`);
 }
 
 /** Block 5: reorder — clone a past request's items into the current draft. */
@@ -131,31 +146,36 @@ export async function reorder(data: FormData) {
   const { customer, rep } = await requireCustomer();
   const sourceId = String(data.get("requestId") ?? "");
 
-  const [source] = await db
-    .select({ id: requests.id })
-    .from(requests)
-    .where(and(eq(requests.id, sourceId), eq(requests.customerId, customer.id)))
-    .limit(1);
-  if (!source) return;
+  const cloned = await asCustomer(customer.id, async (tx) => {
+    const [source] = await tx
+      .select({ id: requests.id })
+      .from(requests)
+      .where(and(eq(requests.id, sourceId), eq(requests.customerId, customer.id)))
+      .limit(1);
+    if (!source) return false;
 
-  const items = await db
-    .select()
-    .from(requestItems)
-    .where(eq(requestItems.requestId, source.id));
-  if (items.length === 0) return;
+    const items = await tx
+      .select()
+      .from(requestItems)
+      .where(eq(requestItems.requestId, source.id));
+    if (items.length === 0) return false;
 
-  const draft = await getOrCreateDraft(rep.id, customer.id);
-  await db.insert(requestItems).values(
-    items.map((i) => ({
-      requestId: draft.id,
-      title: i.title,
-      sourceUrl: i.sourceUrl,
-      imageUrl: i.imageUrl,
-      price: i.price,
-      quantity: i.quantity,
-      customerNote: i.customerNote,
-    })),
-  );
+    const draft = await getOrCreateDraft(tx, rep.id, customer.id);
+    await tx.insert(requestItems).values(
+      items.map((i) => ({
+        requestId: draft.id,
+        title: i.title,
+        sourceUrl: i.sourceUrl,
+        imageUrl: i.imageUrl,
+        price: i.price,
+        quantity: i.quantity,
+        customerNote: i.customerNote,
+      })),
+    );
+    return true;
+  });
+
+  if (!cloned) return;
 
   revalidatePath("/shop");
   redirect("/shop?reordered=1");
@@ -167,14 +187,16 @@ export async function saveFavourite(data: FormData) {
   const title = String(data.get("title") ?? "").trim();
   if (!title) return;
 
-  await db.insert(favourites).values({
-    repId: rep.id,
-    customerId: customer.id,
-    title: title.slice(0, 500),
-    sourceUrl: cleanUrl(String(data.get("sourceUrl") ?? "")),
-    imageUrl: cleanUrl(String(data.get("imageUrl") ?? "")),
-    price: String(data.get("price") ?? "").trim() || null,
-  });
+  await asCustomer(customer.id, (tx) =>
+    tx.insert(favourites).values({
+      repId: rep.id,
+      customerId: customer.id,
+      title: title.slice(0, 500),
+      sourceUrl: cleanUrl(String(data.get("sourceUrl") ?? "")),
+      imageUrl: cleanUrl(String(data.get("imageUrl") ?? "")),
+      price: String(data.get("price") ?? "").trim() || null,
+    }),
+  );
 
   revalidatePath("/shop/favourites");
   revalidatePath("/shop");
@@ -184,9 +206,11 @@ export async function removeFavourite(data: FormData) {
   const { customer } = await requireCustomer();
   const id = String(data.get("favouriteId") ?? "");
 
-  await db
-    .delete(favourites)
-    .where(and(eq(favourites.id, id), eq(favourites.customerId, customer.id)));
+  await asCustomer(customer.id, (tx) =>
+    tx
+      .delete(favourites)
+      .where(and(eq(favourites.id, id), eq(favourites.customerId, customer.id))),
+  );
 
   revalidatePath("/shop/favourites");
 }
@@ -196,24 +220,31 @@ export async function addFavouritesToDraft(data: FormData) {
   const ids = data.getAll("favouriteId").map(String).filter(Boolean);
   if (ids.length === 0) return;
 
-  const rows = await db
-    .select()
-    .from(favourites)
-    .where(and(eq(favourites.customerId, customer.id), inArray(favourites.id, ids)));
-  if (rows.length === 0) return;
+  const added = await asCustomer(customer.id, async (tx) => {
+    const rows = await tx
+      .select()
+      .from(favourites)
+      .where(
+        and(eq(favourites.customerId, customer.id), inArray(favourites.id, ids)),
+      );
+    if (rows.length === 0) return 0;
 
-  const draft = await getOrCreateDraft(rep.id, customer.id);
-  await db.insert(requestItems).values(
-    rows.map((f) => ({
-      requestId: draft.id,
-      title: f.title,
-      sourceUrl: f.sourceUrl,
-      imageUrl: f.imageUrl,
-      price: f.price,
-      quantity: 1,
-    })),
-  );
+    const draft = await getOrCreateDraft(tx, rep.id, customer.id);
+    await tx.insert(requestItems).values(
+      rows.map((f) => ({
+        requestId: draft.id,
+        title: f.title,
+        sourceUrl: f.sourceUrl,
+        imageUrl: f.imageUrl,
+        price: f.price,
+        quantity: 1,
+      })),
+    );
+    return rows.length;
+  });
+
+  if (added === 0) return;
 
   revalidatePath("/shop");
-  redirect("/shop?added=" + rows.length);
+  redirect(`/shop?added=${added}`);
 }

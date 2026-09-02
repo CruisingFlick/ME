@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { and, desc, eq, ne, sql } from "drizzle-orm";
-import { db } from "@/db";
+import { asRep } from "@/db/scoped";
 import { customers, requests } from "@/db/schema";
 import { requireRep } from "@/lib/rep-session";
 
 export default async function CustomersPage() {
   const rep = await requireRep();
 
-  const rows = await db
+  const { rows, open } = await asRep(rep.id, async (tx) => {
+  const rows = await tx
     .select({
       id: customers.id,
       name: customers.name,
@@ -23,10 +24,13 @@ export default async function CustomersPage() {
     .where(eq(customers.repId, rep.id))
     .orderBy(desc(customers.createdAt));
 
-  const [{ open }] = await db
-    .select({ open: sql<number>`count(*)::int` })
-    .from(requests)
-    .where(and(eq(requests.repId, rep.id), ne(requests.status, "draft")));
+    const [{ open }] = await tx
+      .select({ open: sql<number>`count(*)::int` })
+      .from(requests)
+      .where(and(eq(requests.repId, rep.id), ne(requests.status, "draft")));
+
+    return { rows, open };
+  });
 
   return (
     <main className="shell">

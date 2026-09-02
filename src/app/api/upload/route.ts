@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { put } from "@vercel/blob";
 import { getCustomerContext } from "@/lib/customer-session";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,6 +13,14 @@ export async function POST(req: Request) {
   const ctx = await getCustomerContext();
   if (!ctx) {
     return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+  }
+
+  const gate = await rateLimit("upload", ctx.customer.id);
+  if (!gate.ok) {
+    return NextResponse.json(
+      { error: "Too many photos at once — give it a minute." },
+      { status: 429, headers: { "retry-after": String(gate.retryAfter) } },
+    );
   }
 
   if (!process.env.BLOB_READ_WRITE_TOKEN) {

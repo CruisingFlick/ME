@@ -8,6 +8,7 @@ import {
   uniqueIndex,
   boolean,
   check,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
@@ -32,6 +33,12 @@ export const reps = pgTable(
      * Flip it with `npm run rep:addon -- <email> on`.
      */
     triageEnabled: boolean("triage_enabled").notNull().default(false),
+    /*
+     * Bumped to invalidate every existing session for this rep at once — on a
+     * password change, or when they ask to be logged out everywhere. A cookie
+     * carries the version it was issued under and is refused once it lags.
+     */
+    sessionVersion: integer("session_version").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -190,6 +197,28 @@ export const favourites = pgTable(
       .defaultNow(),
   },
   (t) => [index("favourites_customer_idx").on(t.customerId)],
+);
+
+/**
+ * Fixed-window rate limiting.
+ *
+ * In Postgres rather than in memory because serverless instances don't share
+ * memory — a per-instance counter is no limit at all once traffic spreads
+ * across invocations. One row per (bucket, window); old rows are cheap to sweep.
+ *
+ * Deliberately NOT under row-level security: it is infrastructure, not tenant
+ * data, and it has to be writable before we know who is calling.
+ */
+export const rateLimits = pgTable(
+  "rate_limits",
+  {
+    // "<action>:<identifier>", e.g. "scrape:<customer id>" or "login:<ip>".
+    bucket: text("bucket").notNull(),
+    // Start of the window, truncated to the window size.
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    count: integer("count").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.bucket, t.windowStart] })],
 );
 
 export const repsRelations = relations(reps, ({ many }) => ({

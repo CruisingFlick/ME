@@ -1,10 +1,15 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { desc, eq } from "drizzle-orm";
-import { db } from "@/db";
+import { asRep } from "@/db/scoped";
 import { customerNotes, customers, requestItems } from "@/db/schema";
 import { requireRep } from "@/lib/rep-session";
-import { getRepRequest, NEXT_STATUS, STATUS_LABELS } from "@/lib/requests";
+import {
+  getRepRequest,
+  getRequestItems,
+  NEXT_STATUS,
+  STATUS_LABELS,
+} from "@/lib/requests";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ItemCard } from "@/components/ItemCard";
 import { setRepMessage, setRequestStatus } from "@/app/actions/rep";
@@ -18,29 +23,33 @@ export default async function RepRequestPage({
   const rep = await requireRep();
   const { id } = await params;
 
-  // Scoped lookup — another rep's request id simply 404s.
-  const request = await getRepRequest(rep.id, id);
-  if (!request || request.status === "draft") notFound();
+  // Scoped lookup — another rep's request id simply 404s, and under RLS it is
+  // invisible rather than merely filtered out.
+  const found = await asRep(rep.id, async (tx) => {
+    const request = await getRepRequest(tx, rep.id, id);
+    if (!request || request.status === "draft") return null;
 
-  const [customer] = await db
-    .select()
-    .from(customers)
-    .where(eq(customers.id, request.customerId))
-    .limit(1);
+    const [customer] = await tx
+      .select()
+      .from(customers)
+      .where(eq(customers.id, request.customerId))
+      .limit(1);
 
-  const items = await db
-    .select()
-    .from(requestItems)
-    .where(eq(requestItems.requestId, request.id))
-    .orderBy(requestItems.createdAt);
+    const items = await getRequestItems(tx, request.id);
 
-  // Rep-only. Shown here to save a click while re-keying the order.
-  const notes = await db
-    .select()
-    .from(customerNotes)
-    .where(eq(customerNotes.customerId, customer.id))
-    .orderBy(desc(customerNotes.createdAt))
-    .limit(3);
+    // Rep-only. Shown here to save a click while re-keying the order.
+    const notes = await tx
+      .select()
+      .from(customerNotes)
+      .where(eq(customerNotes.customerId, customer.id))
+      .orderBy(desc(customerNotes.createdAt))
+      .limit(3);
+
+    return { request, customer, items, notes };
+  });
+
+  if (!found) notFound();
+  const { request, customer, items, notes } = found;
 
   const next = NEXT_STATUS[request.status];
 

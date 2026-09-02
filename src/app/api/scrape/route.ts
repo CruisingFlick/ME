@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCustomerContext } from "@/lib/customer-session";
 import { scrapeProduct } from "@/lib/scrape";
+import { rateLimit } from "@/lib/rate-limit";
 
 // Node runtime: the scraper needs full fetch/streaming behaviour.
 export const runtime = "nodejs";
@@ -11,6 +12,19 @@ export async function POST(req: Request) {
   const ctx = await getCustomerContext();
   if (!ctx) {
     return NextResponse.json({ error: "Not signed in." }, { status: 401 });
+  }
+
+  // Keyed on the customer, not the IP: an identified customer is the unit of
+  // abuse here, and a shared site NAT shouldn't punish a whole crew.
+  const gate = await rateLimit("scrape", ctx.customer.id);
+  if (!gate.ok) {
+    return NextResponse.json(
+      {
+        error:
+          "That's a lot of links at once. Give it a minute, or type the item in.",
+      },
+      { status: 429, headers: { "retry-after": String(gate.retryAfter) } },
+    );
   }
 
   let url = "";

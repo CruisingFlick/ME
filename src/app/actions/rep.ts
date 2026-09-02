@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
-import { db } from "@/db";
+import { asRep } from "@/db/scoped";
 import {
   customerNotes,
   customers,
@@ -21,13 +21,13 @@ export async function setRequestStatus(data: FormData) {
   if (!REQUEST_STATUSES.includes(status) || status === "draft") return;
 
   // Scoped by rep_id — a rep cannot touch another rep's request.
-  const existing = await getRepRequest(rep.id, requestId);
-  if (!existing) return;
-
-  await db
-    .update(requests)
-    .set({ status, updatedAt: new Date() })
-    .where(and(eq(requests.id, requestId), eq(requests.repId, rep.id)));
+  await asRep(rep.id, async (tx) => {
+    if (!(await getRepRequest(tx, rep.id, requestId))) return;
+    await tx
+      .update(requests)
+      .set({ status, updatedAt: new Date() })
+      .where(and(eq(requests.id, requestId), eq(requests.repId, rep.id)));
+  });
 
   revalidatePath("/dashboard");
   revalidatePath(`/dashboard/requests/${requestId}`);
@@ -39,12 +39,13 @@ export async function setRepMessage(data: FormData) {
   const requestId = String(data.get("requestId") ?? "");
   const message = String(data.get("repMessage") ?? "").trim() || null;
 
-  if (!(await getRepRequest(rep.id, requestId))) return;
-
-  await db
-    .update(requests)
-    .set({ repMessage: message, updatedAt: new Date() })
-    .where(and(eq(requests.id, requestId), eq(requests.repId, rep.id)));
+  await asRep(rep.id, async (tx) => {
+    if (!(await getRepRequest(tx, rep.id, requestId))) return;
+    await tx
+      .update(requests)
+      .set({ repMessage: message, updatedAt: new Date() })
+      .where(and(eq(requests.id, requestId), eq(requests.repId, rep.id)));
+  });
 
   revalidatePath(`/dashboard/requests/${requestId}`);
 }
@@ -60,17 +61,19 @@ export async function addCustomerNote(data: FormData) {
   const body = String(data.get("body") ?? "").trim();
   if (!body) return;
 
-  const [customer] = await db
-    .select({ id: customers.id })
-    .from(customers)
-    .where(and(eq(customers.id, customerId), eq(customers.repId, rep.id)))
-    .limit(1);
-  if (!customer) return;
+  await asRep(rep.id, async (tx) => {
+    const [customer] = await tx
+      .select({ id: customers.id })
+      .from(customers)
+      .where(and(eq(customers.id, customerId), eq(customers.repId, rep.id)))
+      .limit(1);
+    if (!customer) return;
 
-  await db.insert(customerNotes).values({
-    repId: rep.id,
-    customerId,
-    body: body.slice(0, 2000),
+    await tx.insert(customerNotes).values({
+      repId: rep.id,
+      customerId,
+      body: body.slice(0, 2000),
+    });
   });
 
   revalidatePath(`/dashboard/customers/${customerId}`);
@@ -81,9 +84,11 @@ export async function deleteCustomerNote(data: FormData) {
   const noteId = String(data.get("noteId") ?? "");
   const customerId = String(data.get("customerId") ?? "");
 
-  await db
-    .delete(customerNotes)
-    .where(and(eq(customerNotes.id, noteId), eq(customerNotes.repId, rep.id)));
+  await asRep(rep.id, (tx) =>
+    tx
+      .delete(customerNotes)
+      .where(and(eq(customerNotes.id, noteId), eq(customerNotes.repId, rep.id))),
+  );
 
   revalidatePath(`/dashboard/customers/${customerId}`);
 }

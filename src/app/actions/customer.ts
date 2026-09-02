@@ -2,9 +2,10 @@
 
 import { redirect } from "next/navigation";
 import { and, eq } from "drizzle-orm";
-import { db } from "@/db";
+import { asAuth } from "@/db/scoped";
 import { customers, reps } from "@/db/schema";
 import { startCustomerSession } from "@/lib/customer-session";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 export type IdentifyState = { error?: string } | undefined;
 
@@ -26,35 +27,50 @@ export async function identifyCustomer(
     return { error: "Please enter your name and either an email or a phone number." };
   }
 
-  const [rep] = await db
-    .select({ id: reps.id })
-    .from(reps)
-    .where(eq(reps.slug, slug))
-    .limit(1);
-  if (!rep) return { error: "That invite link is no longer valid." };
+  // Invite links are public, so this is the one place an anonymous visitor can
+  // create rows. Capped per IP.
+  const gate = await rateLimit("identify", await clientIp());
+  if (!gate.ok) {
+    return { error: "Too many attempts from here. Try again a bit later." };
+  }
 
   const normalised = contact.toLowerCase().replace(/\s+/g, "");
 
-  const [existing] = await db
-    .select()
-    .from(customers)
-    .where(and(eq(customers.repId, rep.id), eq(customers.contact, normalised)))
-    .limit(1);
+  // asAuth: identifying happens before a customer session exists, so there is
+  // no customer context to scope by yet.
+  const customerId = await asAuth(async (tx) => {
+    const [rep] = await tx
+      .select({ id: reps.id })
+      .from(reps)
+      .where(eq(reps.slug, slug))
+      .limit(1);
+    if (!rep) return null;
 
-  let customerId: string;
-  if (existing) {
-    customerId = existing.id;
-    // Let a returning customer correct the name they gave last time.
-    if (existing.name !== name) {
-      await db.update(customers).set({ name }).where(eq(customers.id, existing.id));
+    const [existing] = await tx
+      .select()
+      .from(customers)
+      .where(and(eq(customers.repId, rep.id), eq(customers.contact, normalised)))
+      .limit(1);
+
+    if (existing) {
+      // Let a returning customer correct the name they gave last time.
+      if (existing.name !== name) {
+        await tx
+          .update(customers)
+          .set({ name })
+          .where(eq(customers.id, existing.id));
+      }
+      return existing.id;
     }
-  } else {
-    const [created] = await db
+
+    const [created] = await tx
       .insert(customers)
       .values({ repId: rep.id, name, contact: normalised })
       .returning({ id: customers.id });
-    customerId = created.id;
-  }
+    return created.id;
+  });
+
+  if (!customerId) return { error: "That invite link is no longer valid." };
 
   await startCustomerSession(customerId);
 

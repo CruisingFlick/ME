@@ -1,6 +1,4 @@
-import { drizzle as drizzleNeon } from "drizzle-orm/neon-http";
-import { drizzle as drizzleNode } from "drizzle-orm/node-postgres";
-import { neon } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "./schema";
 
@@ -13,28 +11,38 @@ if (!url) {
 }
 
 /**
- * Neon's HTTP driver is the right fit on Vercel (no connection pooling to
- * manage across serverless invocations), but it only speaks to Neon. Any other
- * Postgres — a local instance for development or CI — goes over TCP.
+ * A pooled TCP connection, not Neon's HTTP driver.
+ *
+ * This is forced by row-level security: every query runs inside a transaction
+ * that first sets `app.rep_id` (or `app.customer_id`) with SET LOCAL, and the
+ * policies read it back. The HTTP driver sends each statement as an independent
+ * request with no session, so the setting would be gone by the time the query
+ * ran — policies would see NULL and, being fail-closed, return nothing.
+ *
+ * Neon accepts ordinary Postgres connections; use the *pooled* connection
+ * string (the one with `-pooler` in the host) so serverless invocations share
+ * PgBouncer rather than opening a connection each.
  */
-const isNeon = /neon\.(tech|build)/.test(url);
+const globalForDb = globalThis as unknown as { __pool?: Pool };
+
+const pool =
+  globalForDb.__pool ??
+  new Pool({
+    connectionString: url,
+    // Serverless: keep the per-instance footprint small and don't hold
+    // connections open across cold starts.
+    max: 5,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 10_000,
+  });
+
+if (process.env.NODE_ENV !== "production") globalForDb.__pool = pool;
 
 /**
- * Both drivers expose the same query builder. They are declared under a single
- * concrete type rather than a union, because a union of the two collapses the
- * generic call signatures on `.returning()` and friends at every call site.
+ * The unscoped handle. Under RLS this sees *nothing* in the tenant tables —
+ * every real query goes through one of the helpers in `./scoped`, which open a
+ * transaction and set the tenant context first.
  */
-type Db = ReturnType<typeof drizzleNode<typeof schema>>;
+export const db = drizzle(pool, { schema });
 
-// Cached on globalThis so Next.js hot reloads don't open a new pool each time.
-const globalForDb = globalThis as unknown as { __db?: Db };
-
-export const db: Db =
-  globalForDb.__db ??
-  (isNeon
-    ? (drizzleNeon(neon(url), { schema }) as unknown as Db)
-    : drizzleNode(new Pool({ connectionString: url }), { schema }));
-
-if (process.env.NODE_ENV !== "production") globalForDb.__db = db;
-
-export { schema };
+export { schema, pool };

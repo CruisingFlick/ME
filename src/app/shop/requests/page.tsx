@@ -1,4 +1,5 @@
 import { requireCustomer } from "@/lib/customer-session";
+import { asCustomer } from "@/db/scoped";
 import { getCustomerHistory, STATUS_BLURB } from "@/lib/requests";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ItemCard } from "@/components/ItemCard";
@@ -19,7 +20,9 @@ export default async function MyRequestsPage({
 }) {
   const { customer } = await requireCustomer();
   const { sent } = await searchParams;
-  const history = await getCustomerHistory(customer.id);
+  const history = await asCustomer(customer.id, (tx) =>
+    getCustomerHistory(tx, customer.id),
+  );
 
   return (
     <main className="shell shell-narrow">

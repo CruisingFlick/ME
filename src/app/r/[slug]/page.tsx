@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
-import { db } from "@/db";
+import { asAuth } from "@/db/scoped";
 import { reps } from "@/db/schema";
 import { getCustomerContext } from "@/lib/customer-session";
 import { IdentifyForm } from "./IdentifyForm";
@@ -15,16 +15,18 @@ export default async function RepInvitePage({
   const { slug } = await params;
   const { next } = await searchParams;
 
-  const [rep] = await db
-    .select({
-      id: reps.id,
-      name: reps.name,
-      businessName: reps.businessName,
-      slug: reps.slug,
-    })
-    .from(reps)
-    .where(eq(reps.slug, slug))
-    .limit(1);
+  const [rep] = await asAuth((tx) =>
+    tx
+      .select({
+        id: reps.id,
+        name: reps.name,
+        businessName: reps.businessName,
+        slug: reps.slug,
+      })
+      .from(reps)
+      .where(eq(reps.slug, slug))
+      .limit(1),
+  );
 
   if (!rep) notFound();
 

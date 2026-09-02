@@ -14,8 +14,9 @@
     "test:scrape": "tsx src/lib/scrape.test.ts",
     "scrape:try": "tsx src/lib/scrape-cli.ts",
     "test:triage": "tsx src/lib/triage.test.ts",
-    "test": "npm run test:scrape && npm run test:triage",
-    "rep:addon": "tsx src/db/addon.ts"
+    "test": "npm run test:scrape && npm run test:triage && npm run test:session",
+    "rep:addon": "tsx src/db/addon.ts",
+    "test:session": "tsx src/lib/crypto.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.123.0",

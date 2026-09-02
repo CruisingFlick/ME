@@ -1,5 +1,5 @@
 import { desc, eq } from "drizzle-orm";
-import { db } from "@/db";
+import { asCustomer } from "@/db/scoped";
 import { favourites } from "@/db/schema";
 import { requireCustomer } from "@/lib/customer-session";
 import { ItemThumb } from "@/components/ItemCard";
@@ -8,11 +8,13 @@ import { addFavouritesToDraft, removeFavourite } from "@/app/actions/basket";
 export default async function FavouritesPage() {
   const { customer } = await requireCustomer();
 
-  const saved = await db
-    .select()
-    .from(favourites)
-    .where(eq(favourites.customerId, customer.id))
-    .orderBy(desc(favourites.createdAt));
+  const saved = await asCustomer(customer.id, (tx) =>
+    tx
+      .select()
+      .from(favourites)
+      .where(eq(favourites.customerId, customer.id))
+      .orderBy(desc(favourites.createdAt)),
+  );
 
   return (
     <main className="shell shell-narrow">
