@@ -249,23 +249,29 @@ reaches the shop and never sees the order history, pricing, or job address.
 ### Showing a QR code without logging in
 
 `/r/{slug}/qr` is a public page showing a scannable QR for the rep's invite
-link, with their initials badged in the middle.
+link, under the store name and the rep's own name so the customer can see at a
+glance whose code they are pointing a camera at.
 
 It needs no login on purpose. A rep standing in front of a customer should not
 have to open their dashboard to share the link, because that puts every other
 customer's name and order history on the screen in front of them. The page
-carries the business name and the invite link and nothing else — both are meant
-to be handed out, and the invite link alone grants nothing without identifying
-first.
+carries the business name, the rep's name and the invite link, and nothing
+else — all three are meant to be handed out, and the invite link alone grants
+nothing without identifying first.
 
 Reached from **Invite link** in the dashboard; tell reps to bookmark it or save
 it to their home screen. It also prints cleanly for a counter or a van.
 
-The QR uses error-correction level H, which can lose about 30% of the symbol
-and still read — that is what makes room for the badge in the middle. There is
-an end-to-end test that screenshots the rendered page, decodes the pixels with
-the badge in place, and asserts the result is exactly the invite URL, because
-"looks fine on the phone I tested with" is not a guarantee here.
+The QR uses error-correction level **M**. Nothing covers the symbol, so higher
+redundancy would only buy density — more, smaller modules — and this is
+normally scanned off one phone screen by another, at an angle or with glare,
+where fewer and chunkier modules read more easily. **If anything is ever laid
+over the middle (a logo, initials), that has to go back to level "H"** or it
+will scan on the phone you tested with and fail on someone else's.
+
+An end-to-end test screenshots the rendered page, decodes the pixels, and
+asserts the result is exactly the invite URL — so a change to the rendering
+can't silently produce a code that no longer points anywhere useful.
 
 ### Password reset
 

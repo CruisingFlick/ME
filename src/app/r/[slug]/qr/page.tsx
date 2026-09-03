@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { reps } from "@/db/schema";
 import { asAuth } from "@/db/scoped";
-import { inviteQrSvg, initialsFor } from "@/lib/qr";
+import { inviteQrSvg } from "@/lib/qr";
 
 /**
  * The rep's QR code, on a page that needs no login.
@@ -25,7 +25,7 @@ export default async function RepQrPage({
 
   const [rep] = await asAuth((tx) =>
     tx
-      .select({ businessName: reps.businessName, slug: reps.slug })
+      .select({ name: reps.name, businessName: reps.businessName, slug: reps.slug })
       .from(reps)
       .where(eq(reps.slug, slug))
       .limit(1),
@@ -45,6 +45,9 @@ export default async function RepQrPage({
       <div className="qr-card">
         <p className="qr-kicker">Scan to order from</p>
         <h1 className="qr-name">{rep.businessName}</h1>
+        {/* Whose code this is, in plain words. That is the whole job — the
+            customer needs to know which rep and which store before they scan. */}
+        <p className="qr-rep">{rep.name}</p>
 
         <div className="qr-holder">
           {/* The library returns a complete <svg>; it contains no user input. */}
@@ -53,9 +56,6 @@ export default async function RepQrPage({
             dangerouslySetInnerHTML={{ __html: svg }}
             aria-hidden="true"
           />
-          <div className="qr-badge" aria-hidden="true">
-            {initialsFor(rep.businessName)}
-          </div>
         </div>
 
         <p className="qr-help">
