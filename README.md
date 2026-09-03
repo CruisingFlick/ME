@@ -101,19 +101,52 @@ npm run rep:reset -- <email>      # print a password reset link
 
 ## Deploying to Vercel + Neon
 
-1. **Neon** — create a project, copy the pooled connection string.
+1. **Neon** — create a project in **`ap-southeast-2` (Sydney)**, copy the
+   **pooled** connection string (the host contains `-pooler`).
 2. **Vercel** — import this repo. Next.js is detected; no build config needed.
-3. Add `DATABASE_URL` and `SESSION_SECRET` as environment variables.
-4. **Storage → Blob** — create a store and connect it to the project. That sets
+3. Add `DATABASE_URL` and `SESSION_SECRET` under Settings → Environment
+   Variables.
+4. **Set the function region to Sydney (`syd1`)** under Settings → Functions.
+   This matters more than it looks: row-level security means every request
+   opens a transaction and makes two or three round trips to Postgres. With the
+   functions in Washington and the database in Sydney, that is three Pacific
+   crossings per page load, and the app feels broken rather than merely far
+   away. Keep the functions and the database on the same continent.
+5. **Storage → Blob** — create a store and connect it to the project. That sets
    `BLOB_READ_WRITE_TOKEN` for you.
-5. Run the migration once against the Neon database:
+6. Optionally add `RESEND_API_KEY` + `EMAIL_FROM` (self-serve password reset,
+   and sign-in codes for customers returning on a new device) and
+   `ANTHROPIC_API_KEY` (morning triage).
+7. Run the migration once against Neon:
    ```bash
    DATABASE_URL="<your neon url>" npm run db:migrate
    ```
-6. Deploy, then sign up at `/signup` and grab your invite link from
+8. Deploy, then sign up at `/signup` and copy your invite link from
    **Invite link** in the nav.
 
 Both free tiers cover a single rep comfortably. Nothing here runs on Railway.
+
+### Putting Cloudflare in front
+
+To use a domain you manage in Cloudflare while the app stays on Vercel:
+
+1. Vercel → Settings → Domains → add `orders.yourdomain.com`.
+2. In Cloudflare DNS, add the `CNAME` Vercel gives you.
+3. Set that record's proxy status to **DNS only** (grey cloud) until the
+   certificate is issued, then turn the orange cloud back on if you want
+   Cloudflare in the path.
+4. If you do proxy through Cloudflare, set SSL/TLS mode to **Full (strict)**.
+   "Flexible" would terminate TLS at Cloudflare and talk to Vercel over plain
+   HTTP, which breaks the `secure` flag on the session cookies.
+
+This is DNS only — no code changes. Hosting *on* Cloudflare Workers is a
+different job: Vercel Blob would become R2, the database driver would move to
+Neon's WebSocket pool (raw TCP is not available there, and row-level security
+needs a real transaction), and scrypt password hashing would need replacing
+with WebCrypto PBKDF2 to fit the Workers CPU budget. That last one is not a
+one-way door — `verifyPassword` dispatches on a scheme prefix, so a future
+change hashes new passwords with the new scheme and re-hashes old ones on next
+login.
 
 ---
 
