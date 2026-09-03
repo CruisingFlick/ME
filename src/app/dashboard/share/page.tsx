@@ -28,6 +28,18 @@ export default async function SharePage() {
       </div>
 
       <div className="card">
+        <h2>Show a QR code instead</h2>
+        <p className="muted">
+          Standing in front of someone? Open this and let them scan it. It
+          needs no login, so you can show it without your customer list being
+          on screen — bookmark it or save it to your home screen.
+        </p>
+        <a className="btn btn-secondary" href={`/r/${rep.slug}/qr`} target="_blank" rel="noreferrer">
+          Open my QR code
+        </a>
+      </div>
+
+      <div className="card">
         <h2>What to tell them</h2>
         <p className="muted" style={{ marginBottom: 0 }}>
           &ldquo;Save this link on your phone. Any time you need something —
