@@ -80,7 +80,7 @@ Vercel under **Settings → Environment Variables**.
 npm install
 cp .env.example .env.local        # then fill in DATABASE_URL and SESSION_SECRET
 npm run db:migrate                # applies everything in ./drizzle
-npm run dev                       # http://localhost:3000
+npm run dev                       # http://localhost:3100
 ```
 
 Other scripts:
