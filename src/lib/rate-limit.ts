@@ -41,6 +41,12 @@ export const LIMITS = {
    * against the reset limit would lock out the very person who needs it.
    */
   reset: { limit: 5, windowSeconds: 900 },
+  /*
+   * Changing a password requires the current one, so this is a grinding gate
+   * on an already-authenticated session — generous enough not to annoy someone
+   * mistyping, tight enough that a borrowed laptop isn't a free oracle.
+   */
+  passwordChange: { limit: 10, windowSeconds: 900 },
   /** Stops one IP minting endless customer rows against an invite link. */
   identify: { limit: 15, windowSeconds: 3600 },
 } as const satisfies Record<string, Limit>;

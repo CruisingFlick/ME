@@ -26,6 +26,9 @@ export default async function DashboardLayout({
           <Link href="/dashboard/share" className="navlink">
             Invite link
           </Link>
+          <Link href="/dashboard/account" className="navlink">
+            Account
+          </Link>
           <form action={logOutRep}>
             <button type="submit" className="btn-ghost" style={{ border: 0 }}>
               Log out

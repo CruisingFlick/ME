@@ -1,8 +1,6 @@
 import { headers } from "next/headers";
 import { requireRep } from "@/lib/rep-session";
 import { CopyLink } from "./CopyLink";
-import { logOutEverywhere } from "@/app/actions/auth";
-import { SubmitButton } from "@/components/SubmitButton";
 
 export default async function SharePage() {
   const rep = await requireRep();
@@ -37,19 +35,6 @@ export default async function SharePage() {
           a photo, or just type it in. I&rsquo;ll have a quote back to you in the
           morning.&rdquo;
         </p>
-      </div>
-
-      <div className="card">
-        <h2>Signed in elsewhere?</h2>
-        <p className="muted">
-          Signs you out on every device — an old phone, a shared computer, a
-          browser you can&rsquo;t get back to. You&rsquo;ll log in again here.
-        </p>
-        <form action={logOutEverywhere}>
-          <SubmitButton className="btn btn-secondary" pendingLabel="Signing out…">
-            Sign out everywhere
-          </SubmitButton>
-        </form>
       </div>
 
       <div className="card">

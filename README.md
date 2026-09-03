@@ -186,6 +186,20 @@ Completing a reset bumps `session_version`, so every other session for that
 account is signed out. That is the point of a reset when someone else may have
 had access.
 
+### Changing a password while logged in
+
+**Account** in the dashboard nav has a change-password form and the
+sign-out-everywhere control.
+
+Changing a password requires the **current** one. A session cookie alone must
+not be enough to lock the real owner out of their own account — that is exactly
+what someone with a borrowed laptop would try.
+
+Like a reset, it bumps `session_version` and signs out every other session. The
+difference is that the cookie on *this* device is re-issued at the new version,
+so the person making the change stays logged in rather than being bounced to
+the login page.
+
 ### Rate limiting
 
 A fixed-window limiter counted in Postgres (`rate_limits`), not in memory —
@@ -199,6 +213,7 @@ serverless instances share no memory, so a per-instance counter caps nothing.
 | Rep login | 40 / 15 min | IP |
 | Rep login | 8 / 15 min | account |
 | Password reset request | 5 / 15 min | IP |
+| Change password | 10 / 15 min | rep |
 | Customer identify | 15 / hour | IP |
 
 Login is capped on two axes on purpose. The per-IP limit is generous because a
@@ -215,7 +230,7 @@ is why nothing about access control depends on it.
 
 ### What is covered by tests
 
-Forty-two end-to-end checks run against a real Postgres with RLS active and
+Forty-eight end-to-end checks run against a real Postgres with RLS active and
 the app on a non-superuser role, plus unit tests for the session tokens and the
 triage reconciliation. Among them: a second rep gets a 404 and empty lists; a
 private note appears in no customer-facing page or raw response; the triage

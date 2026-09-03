@@ -2,13 +2,15 @@
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { reps } from "@/db/schema";
-import { asAuth } from "@/db/scoped";
+import { asAuth, asRep } from "@/db/scoped";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { hashPassword, verifyPassword } from "@/lib/crypto";
+import { revalidatePath } from "next/cache";
 import { consumeResetToken, createResetToken } from "@/lib/password-reset";
 import { emailConfigured, resetEmailBody, sendEmail } from "@/lib/email";
-import { startRepSession } from "@/lib/rep-session";
+import { requireRep, startRepSession } from "@/lib/rep-session";
 
 export type ForgotState =
   | { sent: true; manualLink?: string }
@@ -108,4 +110,65 @@ export async function completeReset(
   if (rep) await startRepSession(rep.id, rep.sessionVersion);
 
   redirect("/dashboard");
+}
+
+export type ChangeState = { error: string } | { changed: true } | undefined;
+
+/**
+ * Changes the password of the rep who is already signed in.
+ *
+ * Requires the current password: a session cookie alone should not be enough to
+ * lock the real owner out of their own account, which is exactly what someone
+ * with a borrowed laptop would try.
+ *
+ * Like a reset, this bumps `session_version` and so kills every other session —
+ * but the cookie on *this* device is re-issued at the new version, so the
+ * person doing it stays logged in rather than being bounced to the login page.
+ */
+export async function changePassword(
+  _prev: ChangeState,
+  data: FormData,
+): Promise<ChangeState> {
+  const rep = await requireRep();
+
+  const current = String(data.get("current") ?? "");
+  const password = String(data.get("password") ?? "");
+  const confirm = String(data.get("confirm") ?? "");
+
+  const gate = await rateLimit("passwordChange", rep.id);
+  if (!gate.ok) {
+    return {
+      error: `Too many attempts. Try again in ${Math.ceil(gate.retryAfter / 60)} minutes.`,
+    };
+  }
+
+  if (!verifyPassword(current, rep.passwordHash)) {
+    return { error: "That isn't your current password." };
+  }
+  if (password.length < 8) {
+    return { error: "Use a new password of at least 8 characters." };
+  }
+  if (password !== confirm) {
+    return { error: "Those two passwords don't match." };
+  }
+  if (verifyPassword(password, rep.passwordHash)) {
+    return { error: "That's the password you're already using." };
+  }
+
+  const [updated] = await asRep(rep.id, (tx) =>
+    tx
+      .update(reps)
+      .set({
+        passwordHash: hashPassword(password),
+        sessionVersion: sql`${reps.sessionVersion} + 1`,
+      })
+      .where(eq(reps.id, rep.id))
+      .returning({ sessionVersion: reps.sessionVersion }),
+  );
+
+  // Re-issue this device's cookie at the new version. Everything else is dead.
+  if (updated) await startRepSession(rep.id, updated.sessionVersion);
+
+  revalidatePath("/dashboard/account");
+  return { changed: true };
 }
