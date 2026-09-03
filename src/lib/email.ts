@@ -55,7 +55,7 @@ export function resetEmailBody(name: string, link: string): string {
   return [
     `Hi ${name},`,
     "",
-    "Someone asked to reset the password on your Rep Order App account.",
+    "Someone asked to reset the password on your RepLink account.",
     "Open this link to choose a new one:",
     "",
     link,

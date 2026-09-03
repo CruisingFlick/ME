@@ -57,7 +57,7 @@ export async function requestReset(
   if (emailConfigured()) {
     await sendEmail({
       to: email,
-      subject: "Reset your Rep Order App password",
+      subject: "Reset your RepLink password",
       text: resetEmailBody(issued.name, link),
     });
     return { sent: true };

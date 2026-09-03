@@ -1,4 +1,4 @@
-# Rep Order App
+# RepLink
 
 An order-taking app owned by **one salesperson**, not by their employer.
 
@@ -126,27 +126,45 @@ npm run rep:reset -- <email>      # print a password reset link
 
 Both free tiers cover a single rep comfortably. Nothing here runs on Railway.
 
-### Putting Cloudflare in front
+### Connecting replink.com.au (Cloudflare DNS, Vercel hosting)
 
-To use a domain you manage in Cloudflare while the app stays on Vercel:
+Cloudflare holds DNS for the domain; the app runs on Vercel. No code changes —
+this is DNS only.
 
-1. Vercel → Settings → Domains → add `orders.yourdomain.com`.
-2. In Cloudflare DNS, add the `CNAME` Vercel gives you.
-3. Set that record's proxy status to **DNS only** (grey cloud) until the
-   certificate is issued, then turn the orange cloud back on if you want
-   Cloudflare in the path.
-4. If you do proxy through Cloudflare, set SSL/TLS mode to **Full (strict)**.
-   "Flexible" would terminate TLS at Cloudflare and talk to Vercel over plain
-   HTTP, which breaks the `secure` flag on the session cookies.
+1. Deploy to Vercel first and confirm the `*.vercel.app` URL works.
+2. Vercel → Settings → Domains → add **`replink.com.au`** and **`www.replink.com.au`**.
+   Vercel will show the exact records it wants.
+3. In Cloudflare → DNS, add them:
+   - apex `replink.com.au` → the `A` record Vercel gives (Cloudflare flattens a
+     `CNAME` at the apex too, if Vercel offers one)
+   - `www` → `CNAME` to the target Vercel gives
+4. **Set both records to "DNS only" (grey cloud) until Vercel reports the
+   domain as valid and the certificate is issued.** With the orange cloud on,
+   Vercel cannot complete its HTTP validation and the domain sits in "Invalid
+   Configuration" indefinitely — the single most common way this gets stuck.
+5. Once the certificate is live you can switch the orange cloud back on. If you
+   do, set SSL/TLS → Overview to **Full (strict)**. "Flexible" would terminate
+   TLS at Cloudflare and talk to Vercel over plain HTTP, which breaks the
+   `secure` flag on the session cookies and silently logs people out.
+6. Leave "Always Use HTTPS" on. Do not enable Cloudflare caching rules for
+   `/dashboard`, `/shop` or `/api/*` — those are per-user and must not be
+   cached at the edge. The default Cloudflare rules do not cache HTML, so
+   there is nothing to change unless you add a rule yourself.
 
-This is DNS only — no code changes. Hosting *on* Cloudflare Workers is a
-different job: Vercel Blob would become R2, the database driver would move to
-Neon's WebSocket pool (raw TCP is not available there, and row-level security
-needs a real transaction), and scrypt password hashing would need replacing
-with WebCrypto PBKDF2 to fit the Workers CPU budget. That last one is not a
-one-way door — `verifyPassword` dispatches on a scheme prefix, so a future
-change hashes new passwords with the new scheme and re-hashes old ones on next
-login.
+Behind Cloudflare, the rate limiter reads `cf-connecting-ip` for the visitor's
+real address. Both that header and `x-forwarded-for` are advisory — anyone
+reaching the origin directly could set either — which is why rate limiting only
+ever gates unauthenticated actions and never authorisation.
+
+### Hosting *on* Cloudflare instead
+
+A different job, worth knowing the shape of before deciding. Vercel Blob would
+become R2, the database driver would move to Neon's WebSocket pool (raw TCP is
+not available on Workers, and row-level security needs a real transaction), and
+scrypt password hashing would need replacing with WebCrypto PBKDF2 to fit the
+Workers CPU budget. That last one is not a one-way door — `verifyPassword`
+dispatches on a scheme prefix, so a future change hashes new passwords with the
+new scheme and re-hashes old ones on next login.
 
 ---
 

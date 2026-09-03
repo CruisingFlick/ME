@@ -10,8 +10,8 @@ export const dynamic = "force-static";
  */
 export function GET() {
   const manifest = {
-    name: "Rep Order App",
-    short_name: "Rep Orders",
+    name: "RepLink",
+    short_name: "RepLink",
     description:
       "Send your rep a product request any time — paste a link, snap a photo, or share straight from another app.",
     start_url: "/shop",

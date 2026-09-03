@@ -69,8 +69,20 @@ export type RateVerdict = {
  */
 export async function clientIp(): Promise<string> {
   const h = await headers();
+
+  /*
+   * Behind Cloudflare, `cf-connecting-ip` is the visitor's real address and is
+   * unambiguous. Without it we'd fall back to parsing x-forwarded-for, and if
+   * that chain ever came back with a Cloudflare edge address instead, every
+   * customer in the world would share one rate-limit bucket — turning the
+   * limiter into an outage rather than a defence.
+   */
+  const cf = h.get("cf-connecting-ip");
+  if (cf) return cf.trim().slice(0, 64);
+
   const fwd = h.get("x-forwarded-for");
   if (fwd) return fwd.split(",")[0]!.trim().slice(0, 64);
+
   return h.get("x-real-ip")?.slice(0, 64) ?? "unknown";
 }
 

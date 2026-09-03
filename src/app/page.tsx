@@ -14,7 +14,7 @@ export default async function Home() {
   return (
     <main className="shell shell-narrow">
       <div style={{ padding: "2.5rem 0 1.5rem" }}>
-        <h1>Rep Order App</h1>
+        <h1>RepLink</h1>
         <p className="muted">
           Your customers send you product requests after hours. You pick them up
           in the morning and key them into the store system yourself.
