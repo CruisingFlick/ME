@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useActionState } from "react";
 import { signUpRep } from "@/app/actions/auth";
 import { SubmitButton } from "@/components/SubmitButton";
+import { PasswordField } from "@/components/PasswordField";
 
 export default function SignUpPage() {
   const [state, action] = useActionState(signUpRep, undefined);
@@ -49,17 +50,13 @@ export default function SignUpPage() {
           />
         </div>
 
-        <div className="field">
-          <label htmlFor="password">Password</label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            autoComplete="new-password"
-            minLength={8}
-            required
-          />
-        </div>
+        <PasswordField
+          name="password"
+          label="Password"
+          autoComplete="new-password"
+          minLength={8}
+          hint="At least 8 characters. Tap Show to check what you typed."
+        />
 
         <div style={{ marginTop: "1rem" }}>
           <SubmitButton className="btn btn-block" pendingLabel="Creating…">

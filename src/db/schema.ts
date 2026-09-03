@@ -200,6 +200,32 @@ export const favourites = pgTable(
 );
 
 /**
+ * Password reset tokens.
+ *
+ * The token itself is never stored — only its SHA-256 hash — so a leaked
+ * database backup can't be used to take over accounts. Single use, short lived.
+ */
+export const passwordResets = pgTable(
+  "password_resets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    repId: uuid("rep_id")
+      .notNull()
+      .references(() => reps.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("password_resets_token_hash_unique").on(t.tokenHash),
+    index("password_resets_rep_idx").on(t.repId),
+  ],
+);
+
+/**
  * Fixed-window rate limiting.
  *
  * In Postgres rather than in memory because serverless instances don't share
@@ -255,3 +281,4 @@ export type CustomerNote = typeof customerNotes.$inferSelect;
 export type Request = typeof requests.$inferSelect;
 export type RequestItem = typeof requestItems.$inferSelect;
 export type Favourite = typeof favourites.$inferSelect;
+export type PasswordReset = typeof passwordResets.$inferSelect;

@@ -248,7 +248,8 @@ export function AddItemPanel({
           />
           <p className="tiny" style={{ marginTop: "0.3rem" }}>
             Snap the shelf label, the box, or the old one you&rsquo;re
-            replacing.
+            replacing. Product photos only — anyone given the photo&rsquo;s
+            link can view it.
           </p>
         </div>
       )}

@@ -496,3 +496,17 @@ textarea {
     font-size: 1.3rem;
   }
 }
+
+/* ---------- password field ---------- */
+
+.password-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.password-toggle {
+  flex: 0 0 auto;
+  min-width: 4.5rem;
+  font-size: 0.85rem;
+}

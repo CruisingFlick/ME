@@ -67,6 +67,7 @@ Vercel under **Settings → Environment Variables**.
 | `DATABASE_URL`          | Yes                 | Neon connection string — use the **pooled** one (host contains `-pooler`). Any standard Postgres URL works. The role must not be a superuser and must not have `BYPASSRLS`, or row-level security is bypassed; Neon's default role is correct as-is. |
 | `SESSION_SECRET`        | Yes                 | Signs the rep and customer session cookies. Any random 32+ character string: `openssl rand -base64 32`. Changing it logs everyone out. |
 | `BLOB_READ_WRITE_TOKEN` | Only for photos     | Vercel Blob store token. Vercel injects it automatically once you connect a Blob store to the project. Without it, photo upload returns a friendly "type it in instead" message and everything else works normally. |
+| `RESEND_API_KEY` + `EMAIL_FROM` | Only for self-serve reset | Set both and password-reset links are emailed. Leave them unset and reset still works — the link is shown on screen and `npm run rep:reset` prints one. |
 | `ANTHROPIC_API_KEY`     | Only for triage     | From [console.anthropic.com](https://console.anthropic.com). Powers the morning triage button. Without it the button says triage isn't set up; nothing else depends on it. This is the only variable that costs money to use — see [Morning triage](#morning-triage). |
 
 ---
@@ -90,6 +91,8 @@ npm run test:scrape               # scraper parsing + fallback tests
 npm run test:triage               # triage reconciliation (incl. the injection case)
 npm run test:session              # session token expiry, tampering, revocation
 npm run scrape:try -- "<url>"     # try the scraper against a real page
+npm run rep:addon                 # list reps / switch the triage add-on
+npm run rep:reset -- <email>      # print a password reset link
 ```
 
 ---
@@ -157,8 +160,31 @@ the signature:
   to the browser, so without this a copied cookie value would be valid forever.
 - `reps.session_version` is compared against the version in the token. Bumping
   it invalidates every outstanding cookie for that account at once — that's what
-  **Sign out everywhere** on the invite-link page does. Wire a password-change
-  flow to bump it too, when you add one.
+  **Sign out everywhere** on the invite-link page does, and what completing a
+  password reset does automatically.
+
+### Password reset
+
+`/forgot` issues a single-use token that expires in an hour. Only the token's
+SHA-256 hash is stored, so a database dump contains nothing that can be used to
+take over an account.
+
+Delivery is pluggable, because the app has to work on free hosting with nothing
+else configured:
+
+- **`RESEND_API_KEY` + `EMAIL_FROM` set** → the link is emailed, and reset is
+  self-serve.
+- **Neither set** → the link is shown on screen for you to pass on, and
+  `npm run rep:reset -- dave@example.com https://your-app-url` prints one from
+  the command line.
+
+Either way the page reports the same thing whether or not the email matches an
+account, so it cannot be used to find out who has one — and a link is only ever
+revealed for an address that does.
+
+Completing a reset bumps `session_version`, so every other session for that
+account is signed out. That is the point of a reset when someone else may have
+had access.
 
 ### Rate limiting
 
@@ -170,8 +196,18 @@ serverless instances share no memory, so a per-instance counter caps nothing.
 | Scraping a URL | 30 / 5 min | customer |
 | Photo upload | 20 / 5 min | customer |
 | Morning triage | 6 / hour | rep |
-| Rep login | 10 / 15 min | IP |
+| Rep login | 40 / 15 min | IP |
+| Rep login | 8 / 15 min | account |
+| Password reset request | 5 / 15 min | IP |
 | Customer identify | 15 / hour | IP |
+
+Login is capped on two axes on purpose. The per-IP limit is generous because a
+whole office behind one NAT shares an address, and locking all of them out
+because one person mistypes a password is worse than the attack it prevents;
+the tight per-account limit is what actually stops someone grinding at a
+specific rep. Reset has its own bucket rather than sharing login's — the person
+asking for a reset has usually just failed several logins, and must not be
+locked out of the remedy by the symptom.
 
 It **fails open**: if the limiter itself errors the request proceeds. That is
 the right trade for abuse protection and the wrong one for authorisation, which
@@ -179,7 +215,7 @@ is why nothing about access control depends on it.
 
 ### What is covered by tests
 
-Thirty-four end-to-end checks run against a real Postgres with RLS active and
+Forty-two end-to-end checks run against a real Postgres with RLS active and
 the app on a non-superuser role, plus unit tests for the session tokens and the
 triage reconciliation. Among them: a second rep gets a 404 and empty lists; a
 private note appears in no customer-facing page or raw response; the triage
@@ -192,8 +228,8 @@ customer's limit doesn't affect another.
   can open it without authenticating.
 - Invite slugs are enumerable by design; they are meant to be shared. They
   expose a rep's business name, nothing more.
-- There is no password-reset flow yet. When you add one, bump
-  `session_version` as part of it.
+- Reset links are only as private as the inbox they land in. That is the normal
+  trade for email-based reset; the one-hour single-use window limits it.
 
 ---
 

@@ -79,11 +79,14 @@ export async function logInRep(
   const email = str(data, "email").toLowerCase();
   const password = String(data.get("password") ?? "");
 
-  // Per IP, before touching the database: this is the password-grinding gate.
-  const gate = await rateLimit("login", await clientIp());
-  if (!gate.ok) {
+  // Two gates: a generous one per IP (a shared office address must not lock
+  // everyone out) and a tight one per account (which is what stops grinding).
+  const byIp = await rateLimit("login", await clientIp());
+  const byAccount = await rateLimit("loginAccount", email);
+  if (!byIp.ok || !byAccount.ok) {
+    const wait = Math.max(byIp.retryAfter, byAccount.retryAfter);
     return {
-      error: `Too many attempts. Try again in ${Math.ceil(gate.retryAfter / 60)} minutes.`,
+      error: `Too many attempts. Try again in ${Math.ceil(wait / 60)} minutes.`,
     };
   }
 

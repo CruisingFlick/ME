@@ -50,6 +50,20 @@
       "when": 1788389141760,
       "tag": "0006_useful_captain_america",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788392336162,
+      "tag": "0007_real_mandrill",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788392337162,
+      "tag": "0008_password_reset_rls",
+      "breakpoints": true
     }
   ]
 }

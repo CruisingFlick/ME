@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useActionState } from "react";
 import { logInRep } from "@/app/actions/auth";
 import { SubmitButton } from "@/components/SubmitButton";
+import { PasswordField } from "@/components/PasswordField";
 
 export default function LogInPage() {
   const [state, action] = useActionState(logInRep, undefined);
@@ -28,16 +29,11 @@ export default function LogInPage() {
           />
         </div>
 
-        <div className="field">
-          <label htmlFor="password">Password</label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            required
-          />
-        </div>
+        <PasswordField
+          name="password"
+          label="Password"
+          autoComplete="current-password"
+        />
 
         <div style={{ marginTop: "1rem" }}>
           <SubmitButton className="btn btn-block" pendingLabel="Logging in…">
@@ -45,6 +41,10 @@ export default function LogInPage() {
           </SubmitButton>
         </div>
       </form>
+
+      <p className="muted" style={{ textAlign: "center" }}>
+        <Link href="/forgot">Forgotten your password?</Link>
+      </p>
 
       <p className="muted" style={{ textAlign: "center" }}>
         No account yet? <Link href="/signup">Create one</Link>

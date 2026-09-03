@@ -26,8 +26,21 @@ export const LIMITS = {
   upload: { limit: 20, windowSeconds: 300 },
   /** Each run costs real money at the API. */
   triage: { limit: 6, windowSeconds: 3600 },
-  /** Password grinding, per IP. */
-  login: { limit: 10, windowSeconds: 900 },
+  /*
+   * Login is limited on two axes. Per IP is deliberately generous: a whole
+   * office behind one NAT shares an address, and locking all of them out
+   * because one person fat-fingers a password is worse than the attack it
+   * prevents. The tight limit is per account, which is what actually stops
+   * someone grinding at a specific rep.
+   */
+  login: { limit: 40, windowSeconds: 900 },
+  loginAccount: { limit: 8, windowSeconds: 900 },
+  /*
+   * Reset gets its own bucket rather than sharing login's. Someone asking for
+   * a reset has usually just failed several logins — charging those failures
+   * against the reset limit would lock out the very person who needs it.
+   */
+  reset: { limit: 5, windowSeconds: 900 },
   /** Stops one IP minting endless customer rows against an invite link. */
   identify: { limit: 15, windowSeconds: 3600 },
 } as const satisfies Record<string, Limit>;
