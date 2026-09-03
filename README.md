@@ -31,13 +31,15 @@ to the rep account, and it travels with them.
 
 1. Tap the rep's link, put in a name and an email or mobile. No password, no
    account. The device remembers them for a year.
-2. Add what they need, three ways:
+2. On a device they've used before, they're straight in. On a new one, if
+   they've ordered before, a 6-digit code goes to their email first.
+3. Add what they need, three ways:
    - **Paste a link** — the app reads the public product page and fills in the
      name, photo and price.
    - **Photo** — snap the shelf label or the old unit and describe it.
    - **Share** — on Android, share a product page straight into the app from
      any browser.
-3. Send it through, then watch the status change as the rep works it.
+4. Send it through, then watch the status change as the rep works it.
 
 ---
 
@@ -163,6 +165,36 @@ the signature:
   **Sign out everywhere** on the invite-link page does, and what completing a
   password reset does automatically.
 
+### Customer identity
+
+A customer identifies with a name and a contact — no password, because
+after-hours convenience is the product and a low-frequency user on a phone at
+11pm will not remember one.
+
+That alone is not proof of identity, though: an invite link is public and a
+tradie's email is on the side of their van. So a **6-digit code** is required
+when someone identifies as an *existing* customer on a device we don't
+recognise. It goes to the email on the account, expires in 10 minutes, and dies
+after five wrong guesses.
+
+The friction lands only where the risk is:
+
+| Situation | What happens |
+| --------- | ------------ |
+| Brand new customer | Straight in — no history to protect yet |
+| Returning, same device | Straight in — the year-long cookie |
+| Returning, new device | Code to their email first |
+
+Two cases a code can't reach — a customer whose contact is a mobile number, and
+a deployment with no email provider — are covered by a **rep-issued sign-in
+link**: a button on the customer's page in the dashboard, good for a day. The
+rep is vouching for someone they already know, which is the right authority for
+it.
+
+There is an end-to-end test that plays the attack out: given only the public
+invite link and a customer's email address, it confirms the intruder never
+reaches the shop and never sees the order history, pricing, or job address.
+
 ### Password reset
 
 `/forgot` issues a single-use token that expires in an hour. Only the token's
@@ -215,6 +247,7 @@ serverless instances share no memory, so a per-instance counter caps nothing.
 | Password reset request | 5 / 15 min | IP |
 | Change password | 10 / 15 min | rep |
 | Customer identify | 15 / hour | IP |
+| Sign-in code guesses | 12 / 15 min | customer (plus 5 tries per code) |
 
 Login is capped on two axes on purpose. The per-IP limit is generous because a
 whole office behind one NAT shares an address, and locking all of them out
@@ -230,7 +263,7 @@ is why nothing about access control depends on it.
 
 ### What is covered by tests
 
-Forty-eight end-to-end checks run against a real Postgres with RLS active and
+Fifty-four end-to-end checks run against a real Postgres with RLS active and
 the app on a non-superuser role, plus unit tests for the session tokens and the
 triage reconciliation. Among them: a second rep gets a 404 and empty lists; a
 private note appears in no customer-facing page or raw response; the triage

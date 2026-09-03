@@ -510,3 +510,10 @@ textarea {
   min-width: 4.5rem;
   font-size: 0.85rem;
 }
+
+.code-input {
+  font-size: 1.5rem;
+  letter-spacing: 0.4em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}

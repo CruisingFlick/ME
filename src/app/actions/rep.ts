@@ -3,6 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
 import { asRep } from "@/db/scoped";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { signSession } from "@/lib/crypto";
 import {
   customerNotes,
   customers,
@@ -91,4 +94,40 @@ export async function deleteCustomerNote(data: FormData) {
   );
 
   revalidatePath(`/dashboard/customers/${customerId}`);
+}
+
+/**
+ * Issues a one-day sign-in link for one of the rep's own customers.
+ *
+ * The way in for customers an emailed code can't reach — a mobile-only
+ * contact, or a deployment with no email provider. The rep is vouching for
+ * them, which is reasonable: they know their own customers.
+ */
+export async function createCustomerSignInLink(data: FormData) {
+  const rep = await requireRep();
+  const customerId = String(data.get("customerId") ?? "");
+
+  // Scoped: a rep can only ever mint a link for a customer of their own.
+  const [customer] = await asRep(rep.id, (tx) =>
+    tx
+      .select({ id: customers.id })
+      .from(customers)
+      .where(and(eq(customers.id, customerId), eq(customers.repId, rep.id)))
+      .limit(1),
+  );
+  if (!customer) return;
+
+  const token = signSession(customer.id, 60 * 60 * 24);
+
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
+  const proto =
+    h.get("x-forwarded-proto") ?? (host.includes("localhost") ? "http" : "https");
+
+  // Round-trips through the URL so the page can show it without another action.
+  redirect(
+    `/dashboard/customers/${customerId}?signin=${encodeURIComponent(
+      `${proto}://${host}/c/${token}`,
+    )}`,
+  );
 }

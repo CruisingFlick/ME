@@ -1,4 +1,9 @@
-import "server-only";
+/*
+ * No `server-only` guard here, unlike the other lib modules: this is also
+ * imported by the `rep:reset` CLI, which runs outside Next. It can't reach a
+ * client bundle regardless — it imports the database layer, and `pg` doesn't
+ * bundle for the browser.
+ */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { passwordResets, reps } from "@/db/schema";

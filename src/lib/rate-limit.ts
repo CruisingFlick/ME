@@ -47,6 +47,8 @@ export const LIMITS = {
    * mistyping, tight enough that a borrowed laptop isn't a free oracle.
    */
   passwordChange: { limit: 10, windowSeconds: 900 },
+  /** Guessing budget across codes, on top of the per-code attempt cap. */
+  verifyCode: { limit: 12, windowSeconds: 900 },
   /** Stops one IP minting endless customer rows against an invite link. */
   identify: { limit: 15, windowSeconds: 3600 },
 } as const satisfies Record<string, Limit>;

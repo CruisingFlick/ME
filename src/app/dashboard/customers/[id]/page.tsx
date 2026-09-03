@@ -5,7 +5,11 @@ import { asRep } from "@/db/scoped";
 import { customerNotes, customers, requests } from "@/db/schema";
 import { requireRep } from "@/lib/rep-session";
 import { StatusBadge } from "@/components/StatusBadge";
-import { addCustomerNote, deleteCustomerNote } from "@/app/actions/rep";
+import {
+  addCustomerNote,
+  createCustomerSignInLink,
+  deleteCustomerNote,
+} from "@/app/actions/rep";
 import { SubmitButton } from "@/components/SubmitButton";
 
 function when(d: Date | null) {
@@ -15,11 +19,14 @@ function when(d: Date | null) {
 
 export default async function CustomerPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ signin?: string }>;
 }) {
   const rep = await requireRep();
   const { id } = await params;
+  const { signin } = await searchParams;
 
   const found = await asRep(rep.id, async (tx) => {
     const [customer] = await tx
@@ -104,6 +111,33 @@ export default async function CustomerPage({
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section className="card">
+        <h2>Sign-in link</h2>
+        <p className="muted">
+          For a customer who can&rsquo;t get a code by email — a mobile-only
+          contact, or a new phone. Send them this and they&rsquo;re straight in.
+          It lasts a day.
+        </p>
+        {signin ? (
+          <div className="linkbox">
+            <input
+              className="grow"
+              readOnly
+              value={signin}
+              onFocus={undefined}
+              aria-label={`Sign-in link for ${customer.name}`}
+            />
+          </div>
+        ) : (
+          <form action={createCustomerSignInLink}>
+            <input type="hidden" name="customerId" value={customer.id} />
+            <SubmitButton className="btn btn-secondary" pendingLabel="Making one…">
+              Create a sign-in link
+            </SubmitButton>
+          </form>
         )}
       </section>
 

@@ -226,6 +226,32 @@ export const passwordResets = pgTable(
 );
 
 /**
+ * One-time codes proving control of a customer's contact address.
+ *
+ * Only needed when someone identifies as an *existing* customer on a device we
+ * don't recognise — a returning customer on their own phone never sees one.
+ * Like reset tokens, only the hash is stored.
+ */
+export const customerVerifications = pgTable(
+  "customer_verifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    codeHash: text("code_hash").notNull(),
+    // Guessing budget. A 6-digit code is only safe with a hard attempt cap.
+    attempts: integer("attempts").notNull().default(0),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("customer_verifications_customer_idx").on(t.customerId)],
+);
+
+/**
  * Fixed-window rate limiting.
  *
  * In Postgres rather than in memory because serverless instances don't share
@@ -282,3 +308,4 @@ export type Request = typeof requests.$inferSelect;
 export type RequestItem = typeof requestItems.$inferSelect;
 export type Favourite = typeof favourites.$inferSelect;
 export type PasswordReset = typeof passwordResets.$inferSelect;
+export type CustomerVerification = typeof customerVerifications.$inferSelect;

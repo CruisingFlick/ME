@@ -64,6 +64,20 @@
       "when": 1788392337162,
       "tag": "0008_password_reset_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788394953832,
+      "tag": "0009_classy_psylocke",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788394954832,
+      "tag": "0010_customer_verification_rls",
+      "breakpoints": true
     }
   ]
 }
