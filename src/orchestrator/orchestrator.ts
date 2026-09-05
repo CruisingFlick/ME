@@ -16,6 +16,7 @@ import { Workspaces } from "../kernel/workspace.js";
 import { TaskGraph } from "../kernel/tasks.js";
 import { buildIntegrations, integrationStatus, type Integrations } from "../integrations/index.js";
 import { ProviderRegistry, CLI_PROVIDER_IDS } from "../providers/registry.js";
+import { openAiPricedFromDefaults } from "../providers/openai.js";
 import { ToolRegistry } from "../tools/registry.js";
 import type { ToolContext } from "../tools/types.js";
 import { ZERO_USAGE, type AgentSpec, type Role, type Task, type Usage } from "../types.js";
@@ -255,6 +256,17 @@ export class Orchestrator {
           `spend shown is what these tokens would cost through the API; ` +
             `${[...new Set(onCli)].join(" and ")} runs on the installed CLI, so a subscription ` +
             `is charged nothing per run and its own session allowance is the real limit`,
+        );
+      }
+
+      // The other half of the same honesty: openai's rates are not knowable
+      // from here, and the placeholder defaults were Anthropic's - a run
+      // reported $6.68 priced off the wrong vendor's table.
+      const usesOpenAi = [this.builderProvider, this.reviewerProvider].includes("openai");
+      if (usesOpenAi && openAiPricedFromDefaults()) {
+        notes.push(
+          `openai spend is an estimate: set OPENAI_USD_PER_MTOK_INPUT and ` +
+            `OPENAI_USD_PER_MTOK_OUTPUT from your usage dashboard for a real figure`,
         );
       }
 

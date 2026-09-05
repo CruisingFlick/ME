@@ -7,7 +7,7 @@ working *on* it.
 ## Commands
 
 ```bash
-npm test                 # 160 tests, ~15s, no network
+npm test                 # 164 tests, ~15s, no network
 npm run typecheck
 npm run demo             # full pipeline against the mock provider, no key needed
 npm run hive -- doctor   # what is configured
@@ -89,6 +89,12 @@ These each exist because the alternative failed in a real run:
   behind saying nothing. `pushTree` parents on the branch when it exists, or the
   default branch when it does not; parenting always on the default branch drops
   whatever an earlier push landed that this one does not mention.
+- **A cost figure says whose price list it came from.** OpenAI calls were
+  priced with Anthropic's hard-coded $5/$25 and billed every cache read as fresh
+  input, so a cross-vendor run reported $6.68 computed off the wrong vendor's
+  table - and `--max-usd` was capping a quantity nobody was charging. Rates are
+  configuration; when they are unset the report calls its own number an
+  estimate rather than asserting it.
 - **Sensitive blackboard keys are withheld from the rendered board**, which goes
   into every agent's context on every turn.
 - **An agent is told when its turns are nearly gone.** It cannot budget what it

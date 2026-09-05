@@ -109,9 +109,7 @@ export class OpenAIProvider implements ModelProvider {
         inputTokens,
         outputTokens,
         cachedInputTokens,
-        // Priced conservatively: this table only knows Anthropic rates, and an
-        // under-priced model would defeat the run's spend cap.
-        costUsd: (inputTokens / 1_000_000) * 5 + (outputTokens / 1_000_000) * 25,
+        costUsd: priceOpenAi(inputTokens, cachedInputTokens, outputTokens),
       },
     };
   }
@@ -191,4 +189,51 @@ function safeParse(raw: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/**
+ * What a call cost, as far as this process can know.
+ *
+ * The rates were hard-coded at $5/$25 - Anthropic's Opus prices, copied with
+ * the provider and applied to a different vendor's tokens - and the cached
+ * count was read and then ignored, so cache reads billed at full rate. A run
+ * reported $6.68 on numbers that came from the wrong price list, which makes
+ * `--max-usd` a cap on a quantity nobody is charging.
+ *
+ * Rates belong in configuration, not in a constant that goes stale silently.
+ * The defaults are a placeholder, and `pricedFromDefaults` says so, so the
+ * report can admit the figure is an estimate rather than assert it.
+ */
+export const OPENAI_DEFAULT_INPUT_USD_PER_MTOK = 5;
+export const OPENAI_DEFAULT_OUTPUT_USD_PER_MTOK = 25;
+
+function rate(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+export function openAiPricedFromDefaults(): boolean {
+  return !process.env.OPENAI_USD_PER_MTOK_INPUT?.trim()
+    && !process.env.OPENAI_USD_PER_MTOK_OUTPUT?.trim();
+}
+
+export function priceOpenAi(
+  inputTokens: number,
+  cachedInputTokens: number,
+  outputTokens: number,
+): number {
+  const inputRate = rate("OPENAI_USD_PER_MTOK_INPUT", OPENAI_DEFAULT_INPUT_USD_PER_MTOK);
+  const outputRate = rate("OPENAI_USD_PER_MTOK_OUTPUT", OPENAI_DEFAULT_OUTPUT_USD_PER_MTOK);
+  // prompt_tokens includes the cached ones, and a cache read is not billed at
+  // the full rate. Without a rate for it, count it at a tenth - still an
+  // estimate, but a far closer one than charging it twice over.
+  const cachedRate = rate("OPENAI_USD_PER_MTOK_CACHED", inputRate / 10);
+  const fresh = Math.max(0, inputTokens - cachedInputTokens);
+  return (
+    (fresh / 1_000_000) * inputRate +
+    (cachedInputTokens / 1_000_000) * cachedRate +
+    (outputTokens / 1_000_000) * outputRate
+  );
 }
